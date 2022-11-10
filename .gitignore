@@ -1,9 +1,11 @@
 .Rhistory
 ^.*\.Rproj$
 ^\.Rproj\.user$
+.Rproj.user/
 .Rproj.user
 .Rproj.user/*
 .Rbuildignore
 DESCRIPTION
 NAMESPACE
 pgpamdb.Rproj
+temp/
