@@ -3,7 +3,7 @@ library(RPostgres)
 library(foreach)
 library(tuneR)
 
-setwd("C:/Users/daniel.woodrich/Desktop/pgpamdb")
+#setwd("C:/Users/daniel.woodrich/Desktop/pgpamdb")
 
 source("./R/functions.R") #package under construction
 
@@ -166,5 +166,4 @@ print(dbFetch(dbSendQuery(con,"SELECT name FROM data_collection WHERE historic_n
 
 #and by that I mean AW15_AU_BS02. Ok, upload this mooring so I can get some good LM data up. 
 
-
-
+load_soundfile_metadata(con,"//161.55.120.117/NMML_AcousticsData/Audio_Data/Waves","AW15_AU_BS02")
