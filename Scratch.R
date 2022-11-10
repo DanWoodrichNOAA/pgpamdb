@@ -3,13 +3,13 @@ library(RPostgres)
 library(foreach)
 library(tuneR)
 
-setwd("C:/Users/daniel.woodrich/Desktop/postgres_data_load")
+setwd("C:/Users/daniel.woodrich/Desktop/pgpamdb")
 
-source("functions.R") #package under construction
+source("./R/functions.R") #package under construction
 
-con=pamdbConnect("poc","C:/Users/daniel.woodrich/Desktop/cloud_sql_db/etc/key.R",
-             "C:/Users/daniel.woodrich/Desktop/cloud_sql_db/client-key.pem",
-             "C:/Users/daniel.woodrich/Desktop/cloud_sql_db/client-cert.pem")
+source("./etc/paths.R") #populates connection paths which contain connection variables. 
+
+con=pamdbConnect("poc",keyscript,clientkey,clientcert)
 
  #look at deployments currently loaded, ponder if loading it all up to postgres is a good idea: 
 
@@ -147,4 +147,24 @@ table_update(con,"data_collection",dataset)
 load_soundfile_metadata(con,"//161.55.120.117/NMML_AcousticsData/Audio_Data/Waves","AL18_AU_UN01-b")
 
 dbDisconnect(con)
+
+#try to load in some LM result data into the db. 
+  
+query="SELECT DISTINCT detections.* FROM filegroups 
+JOIN bins_filegroups ON filegroups.Name = bins_filegroups.FG_name 
+JOIN bins ON bins.id = bins_filegroups.bins_id 
+JOIN detections ON bins.FileName = detections.StartFile 
+WHERE filegroups.Name = 'AL18_AU_UN01-b' AND detections.SignalCode = 'LM' AND detections.Type = 'DET';"
+
+query <- gsub("[\r\n]", "", query) 
+
+test=data_pull(query)
+
+#that worked, the only problem is that we already knew that it was on here which is boring. Kind of want to upload another mooring. AW15_AU_BS2?
+
+print(dbFetch(dbSendQuery(con,"SELECT name FROM data_collection WHERE historic_name = 'AW15_AU_BS2'")))
+
+#and by that I mean AW15_AU_BS02. Ok, upload this mooring so I can get some good LM data up. 
+
+
 

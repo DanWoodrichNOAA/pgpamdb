@@ -9,3 +9,4 @@ DESCRIPTION
 NAMESPACE
 pgpamdb.Rproj
 temp/
+etc/*
