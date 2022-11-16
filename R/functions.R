@@ -33,6 +33,128 @@ pamdbConnect<-function(dbname,infoScript,sslKey_path,sslCert_path){
 
 #DML and SQL operations.
 
+#' Insert data into the database
+#'
+#' Insert data into a named database table. Assumes postgresql db with existing connection.
+#' @param conn The database connection
+#' @param tablename The name of the data table in the database
+#' @param dataset The R object to update- must have id column matching type of tablename, and all columns must have equivalents in database table.
+#' @param colvector Vector which specifies specific columns from dataset to update: otherwise assumes all matching column names from dataset to be updated
+#' @param idname character string specifying name of primary key.
+#' @return a data frame of the ids of the uploaded dataset, in order, from the target table.
+#' @export
+table_insert <-function(conn,tablename,dataset,colvector=NULL,idname = 'id'){
+
+  #sanitize dataset for integer 64 type, and convert back to integer (doesn't work with dbind further below)
+  for(i in 1:length(dataset)){
+    if(class(dataset[,i])=="integer64"){
+      dataset[,i]=as.integer(dataset[,i])
+    }
+  }
+
+  if(is.null(colvector)){
+    colvector=colnames(dataset)
+  }else{
+    #truncate dataset to just colvector and id
+    dataset = dataset[,which(colnames(dataset) %in% colvector)]
+
+  }
+
+  #check that dataset has all required cols.
+
+  if(any(!colvector %in% colnames(dataset))){
+    stop("insuffecient columns provided in dataset argument")
+  }
+
+  cols = paste("('",paste(colvector,collapse="','"),"')",sep="")
+
+  dtquery = paste("SELECT data_type,column_name
+               FROM information_schema.columns
+               WHERE table_schema = 'public'
+                  AND table_name ='",tablename,"'
+                  AND column_name IN ",cols,sep="")
+
+  dtquery <- gsub("[\r\n]", " ", dtquery)
+
+  #single transaction.
+  dbBegin(conn)
+
+  try({
+  #get data types
+  dtypes = dbFetch(dbSendQuery(conn,dtquery))
+
+  #check data types match.
+  if(any(!colvector %in% dtypes$column_name)){
+    stop("columns do not match database table names")
+  }
+
+  #serialize dataset and construct query.
+  #first part of query
+  q1 = paste("(",paste(colvector,collapse=",",sep=""),")",sep="")
+
+  #second part of query
+  #need to chunk into 100KB size to avoid something on the dbi backend rejecting query size.
+  q2 = ""
+  ds_ser=as.vector(t(unlist(dataset)))
+  #generate sequence:
+  vals=list()
+  for(i in 1:nrow(dataset)){
+    vals[[i]] = seq(from = i, by = nrow(dataset),length.out = length(colvector))
+  }
+  vals=do.call("c",vals)
+
+  ds_by_row = ds_ser[vals]
+  item_count = 0
+  start_ind = 1
+  chunk = 1
+  ids = list()
+  for(i in 1:nrow(dataset)){
+    q2_sub = "("
+    for(j in 1:length(colvector)){
+      item_count = item_count+1
+      new_val = paste("$",item_count,"::",dtypes[which(dtypes$column_name == colvector[j]),"data_type"],sep="")
+      if(j !=length(colvector)){
+        new_val=paste(new_val,",",sep="")
+      }else{
+        new_val=paste(new_val,")",sep="")
+      }
+      q2_sub= paste(q2_sub,new_val,sep="")
+    }
+
+    if(i ==nrow(dataset) | object.size(q2)> 75000){
+
+      q2 = paste(q2,q2_sub,sep="")
+
+      query = paste("INSERT INTO",tablename,q1,"VALUES",q2,"returning",idname,";")
+
+      ids[[chunk]] = dbFetch(dbBind(dbSendQuery(conn, query), params=ds_by_row[start_ind:(i*length(colvector))]))
+
+      start_ind = (i*length(colvector)) + 1
+
+      item_count = 0
+
+      chunk = chunk+1
+
+      q2 = ""
+
+    }else{
+      q2=paste(q2,q2_sub,",",sep="")
+
+    }
+
+  }
+
+  })
+
+  dbCommit(conn)
+
+  ids = do.call('rbind',ids)
+
+  return(ids)
+
+}
+
+
 #' Update data into the database
 #'
 #' Update data into a named database table. Assumes postgresql db with existing connection.
@@ -43,8 +165,6 @@ pamdbConnect<-function(dbname,infoScript,sslKey_path,sslCert_path){
 #' @param idname character string specifying name of primary key.
 #' @return result
 #' @export
-
-#this will update the sql dataset using an R dataset. requires column names of R dataset to be identical.
 table_update <-function(conn,tablename,dataset,colvector=NULL,idname = 'id'){
 
   idname= as.character(idname)
@@ -95,13 +215,15 @@ table_update <-function(conn,tablename,dataset,colvector=NULL,idname = 'id'){
   dtquery = paste("SELECT data_type,column_name
                FROM information_schema.columns
                WHERE table_schema = 'public'
-                  AND table_name ='data_collection'
-                  AND column_name IN",cols)
+                  AND table_name ='",tablename,"'
+                  AND column_name IN ",cols,sep="")
 
-  dtquery <- gsub("[\r\n]", "", dtquery)
+  dtquery <- gsub("[\r\n]", " ", dtquery)
 
   #single transaction.
   dbBegin(conn)
+
+  try({
 
   #get data types
   dtypes = dbFetch(dbSendQuery(conn,dtquery))
@@ -126,14 +248,30 @@ table_update <-function(conn,tablename,dataset,colvector=NULL,idname = 'id'){
     q1 = paste(q1,q1_sub,sep="")
   }
 
+  #third part of query
+  q3 = paste("temp(",idname,",",paste(tempnamesvec,collapse = ","),")",sep="")
+
   #second part of query
   q2 = ""
-  vals = seq(from = 1, by = nrow(dataset),length.out = length(colvector_wid))
+  ds_ser=as.vector(t(unlist(dataset)))
+  #generate sequence:
+  vals=list()
   for(i in 1:nrow(dataset)){
+    vals[[i]] = seq(from = i, by = nrow(dataset),length.out = length(colvector_wid))
+  }
+  vals=do.call("c",vals)
+
+  ds_by_row = ds_ser[vals]
+  item_count = 0
+  start_ind = 1
+
+  for(i in 1:nrow(dataset)){
+
     q2_sub = "("
     for(j in 1:length(colvector_wid)){
-      new_val = paste("$",vals[j],"::",dtypes[which(dtypes$column_name == colvector_wid[j]),"data_type"],sep="")
-      if(j !=length(vals)){
+      item_count = item_count+1
+      new_val = paste("$",item_count,"::",dtypes[which(dtypes$column_name == colvector_wid[j]),"data_type"],sep="")
+      if(j !=length(colvector_wid)){
         new_val=paste(new_val,",",sep="")
       }else{
         new_val=paste(new_val,")",sep="")
@@ -141,29 +279,110 @@ table_update <-function(conn,tablename,dataset,colvector=NULL,idname = 'id'){
       q2_sub= paste(q2_sub,new_val,sep="")
     }
 
-    if(i !=nrow(dataset)){
-      q2_sub=paste(q2_sub,",",sep="")
-      vals = vals + 1
-    }
+    if(i ==nrow(dataset) | object.size(q2)> 75000){
 
-    q2 = paste(q2,q2_sub,sep="")
+      q2 = paste(q2,q2_sub,sep="")
+
+      query = paste("UPDATE",tablename,"AS m SET",q1,"FROM (values",q2,") AS",q3,"WHERE",paste("m.",idname,sep=""),"=",paste("temp.",idname,sep=""))
+
+      dbBind(dbSendQuery(conn, query), params=ds_by_row[start_ind:(i*length(colvector_wid))])
+
+      start_ind = (i*length(colvector_wid)) + 1
+
+      item_count = 0
+
+      q2 = ""
+
+    }else{
+      q2=paste(q2,q2_sub,",",sep="")
+
+    }
 
   }
 
-  #third part of query
-  q3 = paste("temp(",idname,",",paste(tempnamesvec,collapse = ","),")",sep="")
-
-  #assemble query
-  query = paste("UPDATE",tablename,"AS m SET",q1,"FROM (values",q2,") AS",q3,"WHERE",paste("m.",idname,sep=""),"=",paste("temp.",idname,sep=""))
-
-  update <- dbSendQuery(conn, query)
-  dbBind(update, params=as.vector(t(unlist(dataset))))
+  })
 
   dbCommit(conn)
 
 }
 
+#' Delete data in the database by id
+#'
+#' Delete data in a named database table. Assumes postgresql db with existing connection.
+#' @param conn The database connection
+#' @param tablename The name of the data table in the database
+#' @param ids The id vector to delete. All rows with id in vector will be deleted.
+#' @param colvector Vector which specifies specific columns from dataset to update: otherwise assumes all matching column names from dataset to be updated
+#' @param idname character string specifying name of primary key.
+#' @param hard_delete bool specifying whether to 'hard delete', refering to the archiving behavior of detections table on first delete. Only does anything if tablename = 'detections'
+#' @return result
+#' @export
+table_delete <-function(conn,tablename,ids,idname = 'id',hard_delete=FALSE){
+
+  if(length(ids)>1){
+    query = paste("DELETE FROM ",tablename," WHERE ",idname," IN",paste("(",paste(ids,collapse=",",sep=""),")",sep=""))
+  }else{
+    query = paste("DELETE FROM ",tablename," WHERE ",idname," IN",paste("(",ids,")",sep=""))
+
+  }
+
+  if(tablename =="detections" & hard_delete==TRUE){
+
+    #execute query first time here. Then modify it so all are deleted.
+    dbExecute(conn,query)
+
+    if(length(ids)>1){
+      query = paste("DELETE FROM ",tablename," WHERE original_id IN",paste("(",paste(ids,collapse=",",sep=""),")",sep=""))
+    }else{
+      query = paste("DELETE FROM ",tablename," WHERE original_id IN",paste("(",ids,")",sep=""))
+
+    }
+
+  }
+
+  return(dbExecute(conn,query))
+
+}
+
 #convenience functions.
+
+#' Look up database table by named column values and return id
+
+#'
+#'
+#' Look up database table by named column values and return id. Useful for data conversions. Assumes postgresql db with existing connection.
+#' @param conn The database connection
+#' @param tablename The name of the data table in the database
+#' @param vector The values to compare with database table.
+#' @param match_col The name of the database column to compare the vector columns to
+#' @param idname character string specifying name of primary key.
+#' @return lookup table of ids and the initial vector values
+#' @export
+#'
+lookup_from_match <- function(conn,tablename,vector,match_col,idname='id'){
+
+  id_and_name = paste(idname,match_col,sep=",")
+
+  if(length(vector)>1){
+    sf_id_lookup = paste("SELECT ",id_and_name," FROM ",tablename," WHERE ",match_col," IN",paste("(",paste("$",1:(length(vector)-1),collapse=",",sep=""),",$",length(vector),")",sep=""))
+  }else{
+    sf_id_lookup = paste("SELECT ",id_and_name," FROM ",tablename," WHERE ",match_col," IN",paste("($",length(vector),")",sep=""))
+  }
+
+  query1 <- dbSendQuery(conn, sf_id_lookup)
+  dbBind(query1, params=vector)
+
+  #dbCommit(conn)
+
+  res = dbFetch(query1)
+
+  dbClearResult(query1)
+
+  res[[idname]]=as.integer(res[[idname]])
+
+  return(res)
+
+}
 
 #' read wav files on NAS of a specific mooring and upload them to db.
 
@@ -214,6 +433,74 @@ load_soundfile_metadata<-function(conn,rootpath,mooring_name){
   return(rs)
 
 }
+
+#' Convert between INSTINCT detx detection format and database detection format
+#'
+#' Convert between INSTINCT detx detection format and database detection format. Assumes postgresql db with existing connection.
+#' @param conn The database connection
+#' @param dataset The R detx object.
+#' @return result
+#' @export
+#'
+detx_to_db <- function(conn,dataset){
+
+  if(any(dataset$Type=='i_neg') | (!"Type" %in% colnames(dataset))){
+    #mandate type be included to prevent accidental upload of i_neg data
+    stop("protocol for i_neg not yet supported")
+  }
+
+  if((!"procedure" %in% colnames(dataset)) | (!"strength" %in% colnames(dataset))){
+
+    stop("missing procedure or strength column")
+
+  }
+
+  if("LastAnalyst" %in% colnames(dataset) & (!"analyst" %in% colnames(dataset))){
+
+    dataset$analyst = dataset$LastAnalyst
+    dataset$LastAnalyst=NULL
+  }
+
+  #ids for soundfiles:
+  sf_ids = lookup_from_match(con,"soundfiles",unique(c(dataset$StartFile,dataset$EndFile)),"name")
+  dataset$StartFile = sf_ids$id[match(dataset$StartFile,sf_ids$name)]
+  dataset$EndFile = sf_ids$id[match(dataset$EndFile,sf_ids$name)]
+
+  #ids for label
+  lab_id = lookup_from_match(con,"label_codes",dataset$label,"alias")
+  dataset$label = lab_id$id[match(dataset$label,lab_id$alias)]
+
+  #ids for signal_code
+  sigcode_id = lookup_from_match(con,"signals",dataset$SignalCode,"code")
+  dataset$SignalCode = sigcode_id$id[match(dataset$SignalCode,sigcode_id$code)]
+
+  #ids for signal_code
+  strength_id = lookup_from_match(con,"strength_codes",dataset$strength,"name")
+  dataset$strength = strength_id$id[match(dataset$strength,strength_id$name)]
+
+  if("analyst" %in% colnames(dataset)){
+
+    #ids for lastanalyst
+    pers_id = lookup_from_match(con,"personnel",dataset$analyst,"code")
+    dataset$analyst = pers_id$id[match(dataset$analyst,pers_id$code)]
+
+  }
+
+
+  dataset$VisibleHz=NULL
+  dataset$LastAnalyst=NULL
+  dataset$Type= NULL
+  dataset$id = NULL
+
+  colnames(dataset)[match(c("StartTime","EndTime","LowFreq","HighFreq","StartFile","EndFile","Comments","probs","SignalCode"),
+                          colnames(dataset))]=c("start_time","end_time","low_freq","high_freq","start_file","end_file","comments","probability","signal_code")
+
+  dataset$comments[which(is.na(dataset$comments))]=""
+
+  return(dataset)
+
+}
+
 
 
 #' @import RPostgres

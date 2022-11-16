@@ -224,9 +224,7 @@ lookup_from_match <- function(conn,tablename,vector,match_col,idname='id'){
 }
 
 
-
-
-load_detx_detections<-function(conn,dataset){
+detx_to_db <- function(conn,dataset){
 
   if(any(dataset$Type=='i_neg') | (!"Type" %in% colnames(dataset))){
     #mandate type be included to prevent accidental upload of i_neg data
@@ -265,7 +263,7 @@ load_detx_detections<-function(conn,dataset){
   if("analyst" %in% colnames(dataset)){
 
     #ids for lastanalyst
-    pers_id = id_from_match(con,"personnel",dataset$analyst,"code")
+    pers_id = lookup_from_match(con,"personnel",dataset$analyst,"code")
     dataset$analyst = pers_id$id[match(dataset$analyst,pers_id$code)]
 
   }
@@ -281,11 +279,7 @@ load_detx_detections<-function(conn,dataset){
 
   dataset$comments[which(is.na(dataset$comments))]=""
 
-  print(str(dataset))
-
-  print(paste("Submitting to database...",Sys.time()))
-
-  rs = dbAppendTable(conn,"detections" , dataset)
+  return(dataset)
 
 }
 
@@ -321,7 +315,7 @@ test2$procedure=5
 #We could assume that the original data that was reviewed was y lm by Cole, but probably not an ironclad enough assumption.
 #probably best decision is to just load the data as it is.
 
-load_detx_detections(conn,test2)
+#load_detx_detections(con,test2)
 
 yes_so_far = dbFetch(dbSendQuery(con,"SELECT * FROM detections WHERE label = 1;"))
 
@@ -335,4 +329,90 @@ dets_sf = unique(c(yes_so_far$start_file,yes_so_far$end_file))
 bins_sf = unique(yes_so_far_bins$soundfiles_id)
 
 #same soundfiles, at least! Looking at a few examples, all looks good.
+
+#now, delete all the LM data currently on there.
+
+dbLMs = dbFetch(dbSendQuery(con,"SELECT * FROM detections WHERE status = 1;"))
+
+arch_data = dbLMs
+
+arch_data$status = 2
+
+table_update(con,"detections",arch_data,colvector=c("status"),idname = 'id')
+
+#it went through- test if it worked.
+
+dbLMs = dbFetch(dbSendQuery(con,"SELECT * FROM detections WHERE status = 1;"))
+#empty!
+dbLMs = dbFetch(dbSendQuery(con,"SELECT * FROM detections WHERE status = 2;"))
+#here we go.
+
+#based on rules, now there should be empty set if querying bins.
+
+yes_so_far_bins = dbFetch(dbSendQuery(con,"SELECT * FROM bins WHERE lm = 1;"))
+
+#correct!
+
+#cool, that's good. Now, delete the rows. Try out R dbi fxn.
+#looks like there is nothing built in to do it based on ids. So, create the function
+
+out = table_delete(con,'detections',dbLMs$id,hard_delete = TRUE)
+
+#cool, that worked.
+
+#now, build an insert function.
+
+#first, rebuild our LM set.
+
+m_names = c("'AW15_AU_BS02'","'AL18_AU_UN01-b'") #'AL18_AU_UN01-b'
+
+query2=paste("SELECT DISTINCT detections.* FROM filegroups
+JOIN bins_filegroups ON filegroups.Name = bins_filegroups.FG_name
+JOIN bins ON bins.id = bins_filegroups.bins_id
+JOIN detections ON bins.FileName = detections.StartFile
+WHERE filegroups.Name IN (",paste(m_names,collapse=","),") AND detections.SignalCode = 'LM' AND detections.Type = 'DET';",sep="")
+
+query2 <- gsub("[\r\n]", " ", query2)
+
+test3=data_pull(query2)
+
+test3$procedure = test$Analysis_ID
+
+test3$Analysis_ID = NULL
+
+test3$strength = 'tight' #need to add manually.
+
+test3$procedure=5
+
+
+ids = table_insert(con,"detections",detx_to_db(test3))
+
+dbdata = detx_to_db(con,test3)
+
+data = data.frame(ids,dbdata)
+
+data$comments=paste("test: id is ",data$id)
+
+table_update(con,'detections',data)
+
+datatest = data[,c("id","comments")]
+
+datatest$comments = ""
+
+table_update(con,'detections',datatest)
+
+dbLMs = dbFetch(dbSendQuery(con,"SELECT * FROM detections WHERE status = 2;"))
+
+#archived the above test, so delete archive with test comments
+out = table_delete(con,'detections',dbLMs$id)
+
+count_dbLMs = dbFetch(dbSendQuery(con,"SELECT COUNT(*) FROM detections WHERE status = 1;"))
+
+
+#ok, now assemble the insert query. This time, return ids.
+
+#this will update the sql dataset using an R dataset. requires column names of R dataset to be identical.
+
+
+
 
