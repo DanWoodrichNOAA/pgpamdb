@@ -385,7 +385,7 @@ current_dets = dbFetch(dbSendQuery(con,"SELECT * FROM detections WHERE status = 
 query = "SELECT seg_start,seg_end,soundfiles_id,sampling_rate FROM bins
 JOIN soundfiles ON bins.soundfiles_id = soundfiles.id
 JOIN data_collection ON soundfiles.data_collection_id = data_collection.id
-WHERE data_collection.name = 'AW15_AU_BS02' AND bins.type=3" # LIMIT 100"
+WHERE data_collection.name = 'AL18_AU_UN01-b' AND bins.type=2" # LIMIT 100"
 
 query <- gsub("[\r\n]", " ", query)
 
@@ -419,14 +419,23 @@ pres_bins_low = dbFetch(dbSendQuery(con,"SELECT * FROM bins WHERE lm = 1"))
 bins_tab_full_reduce = bins_tab_full[1:100,]
 bins_tab_full_reduce = bins_tab_full[1:200,]
 bins_tab_full_reduce = bins_tab_full[1:400,]
-bins_tab_full_reduce = bins_tab_full[1:1000,]
+bins_tab_full_reduce = bins_tab_full[10001:29124,]
+
+#some value in the test set from 20000 to 30000 is clogging up the works!
 
 #time smaller dataset (100 rows of 225s bins with randomly generated labels)
 #took 3.9624 seconds,4.25 seconds..
 #200 rows: took 8.441 seconds
 #400 rows: 16.63956 secs
 #1000 rows
-datainsert = data.frame(c(1000,5000,10000),c( 1.783661,7.121937,13.68139))
+datainsert = data.frame(c(1000,5000,10000,20000,25000,30000,45000,58248),c( 1.13,4.87,9.607884,19.93,23.71,28.2186,42.52,55.4))
+
+
+#testing while data are loaded to dets and bins
+#1000 rows, 22 seconds (retain dets)
+#9000 rows, 11 seconds (huh?)
+#19k rows, 23.61 seconds (hmm...)
+
 
 #test with 1000 rows with bin relabel disabled lasted 37.47s
 #so- 37.47 of 41.923 secs of insert is dedicated to just det/bin calc!!
@@ -437,7 +446,7 @@ dbAppendTable(con,"detections" , bins_tab_full_reduce)
 enttime = Sys.time() - starttime
 
 dbFetch(dbSendQuery(con,"SELECT count(*) FROM bins where dk = 1"))
-dbFetch(dbSendQuery(con,"SELECT count(*) FROM bins where dk != 99"))
+dbFetch(dbSendQuery(con,"SELECT count(*) FROM bin_label_wide where dk != 99"))
 dbFetch(dbSendQuery(con,"SELECT count(*) FROM detections"))
 dbFetch(dbSendQuery(con,"SELECT count(*) FROM bins_detections"))
 dbFetch(dbSendQuery(con,"SELECT count(*) FROM det_to_archive"))
@@ -451,7 +460,7 @@ dbFetch(dbSendQuery(con,"SELECT count(*) FROM det_to_archive"))
 # 17.55512 seconds
 #1000
 # 45.85782
-datadelete= data.frame(c(1000,5000,10000),c("?",6.680611,13.05972))
+datadelete= data.frame(c(1000,5000,10000,58248),c(1.03,3.52,7.626942,13.37,39.37))
 starttime = Sys.time()
 dbSendQuery(con,"DELETE FROM detections")
 enttime = Sys.time() - starttime
@@ -459,6 +468,119 @@ enttime = Sys.time() - starttime
 starttime = Sys.time()
 dbFetch(dbSendQuery(con,"SELECT id FROM bins where bins.soundfiles_id = 10440"))
 enttime = Sys.time() - starttime
+
+#create an experiment where I load progressively more dummy data, and log duration of operations.
+
+moorings = c("AL16_AU_CL01","AW15_AU_BS02","AL20_AU_PM02-b","AW12_AU_KZ01","AW14_AU_BF03")
+
+signal_tab =dbFetch(dbSendQuery(con,"SELECT * from signals"))
+
+all_binned = signal_tab[which(!is.na(signal_tab$native_bin)),]
+
+row_num = 1
+mooring = c()
+signal_code = c()
+bintype = c()
+time_per = c()
+
+
+
+
+for(i in 1:length(moorings)){
+
+  starttime = Sys.time()
+  val = load_soundfile_metadata(con,"//161.55.120.117/NMML_AcousticsData/Audio_Data/Waves",moorings[i])
+  endtime = Sys.time() - starttime
+
+  mooring = c(mooring,moorings[i])
+  signal_code = c(signal_code,97) #upload 'code' for now.
+  bintype = 97
+  time_per = endtime/val
+
+  write.csv(data.frame(mooring,signal_code,bintype,time_per),"outlog.csv")
+
+  #for every mooring, load up every bin
+
+  for(n in 1:3){
+
+    query = paste("SELECT seg_start,seg_end,soundfiles_id,sampling_rate FROM bins
+    JOIN soundfiles ON bins.soundfiles_id = soundfiles.id
+    JOIN data_collection ON soundfiles.data_collection_id = data_collection.id
+    WHERE data_collection.name = ",moorings[i]," AND bins.type=",n,"",sep="")
+
+    query <- gsub("[\r\n]", " ", query)
+
+    bins_tab = dbFetch(dbSendQuery(con,query))
+
+    template_tab = dbFetch(dbSendQuery(con,"SELECT * FROM detections LIMIT 1"))
+
+    template_tab = template_tab[0,which(!colnames(template_tab) %in% c("id","original_id","modified","analyst","status"))]
+
+    #now populate the table
+
+    for(p in 1:sum(n==all_binned$native_bin)){
+
+      row = all_binned[which(n==all_binned$native_bin)[p],]
+
+      bins_tab_full = data.frame(bins_tab[,c(1,2)],0,bins_tab[,4]/2,bins_tab[,3],bins_tab[,3],NA,'dummy data',0,sample(c(0,1),nrow(bins_tab),replace = TRUE),row$id,1)
+      colnames(bins_tab_full) = colnames(template_tab)
+
+      starttime = Sys.time()
+      val = dbAppendTable(con,"detections" , bins_tab_full_reduce)
+      enttime = Sys.time() - starttime
+
+      mooring = c(mooring,moorings[i])
+      signal_code = c(signal_code,row$id) #upload 'code' for now.
+      bintype = n
+      time_per = endtime/val
+
+      write.csv(data.frame(mooring,signal_code,bintype,time_per),"outlog.csv")
+
+    }
+
+
+
+
+
+
+  }
+
+
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 #test with 1000 rows with bin relabel disabled lasted 36.99141s
 #uhh, don't even have to recalc in delete- how does that make any sense?
