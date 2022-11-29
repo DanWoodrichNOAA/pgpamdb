@@ -17,7 +17,7 @@ pamdbConnect<-function(dbname,infoScript,sslKey_path,sslCert_path){
   cfg = source(infoScript,local = TRUE)
 
   con <- dbConnect(RPostgres::Postgres(),
-                   dbname = "poc",
+                   dbname = dbname,
                    host = dsn_hostname,
                    port = dsn_port,
                    user = dsn_uid,
@@ -233,6 +233,32 @@ table_update <-function(conn,tablename,dataset,colvector=NULL,idname = 'id'){
     stop("columns do not match database table names")
   }
 
+  #query the data table to be modified. Compare to the existing dataset, and reduce it
+  #to only the modified data.
+
+  existingdata = dbFetch(dbSendQuery(conn,paste("SELECT",paste(colvector_wid,collapse = ",",sep=""),"FROM",
+                                        tablename,"WHERE",idname,"IN (",paste(dataset$id,collapse=","),");")))
+
+  for(i in 1:length(existingdata)){
+    if(class(existingdata[,i])=="integer64"){
+      existingdata[,i]=as.integer(existingdata[,i])
+    }
+  }
+
+  comb_data <- merge(existingdata, dataset,by=colvector_wid, all=TRUE)
+
+  delta_ids = comb_data$id[which(duplicated(comb_data$id))]
+
+  if(length(delta_ids)>0 & length(delta_ids)<nrow(dataset)){
+
+    warning("Some identical rows to database copy provided in dataset. Only updating changed rows.")
+
+    dataset = dataset[which(dataset$id %in% delta_ids),]
+
+  }else if(length(delta_ids)==0){
+
+    stop("Error: no changes detected in the provided dataset compared to database copy. Terminating")
+  }
 
   #serialize dataset and construct query.
   #first part of query

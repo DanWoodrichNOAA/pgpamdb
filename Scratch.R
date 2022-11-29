@@ -9,7 +9,7 @@ source("./R/functions.R") #package under construction
 
 source("./etc/paths.R") #populates connection paths which contain connection variables.
 
-con=pamdbConnect("poc",keyscript,clientkey,clientcert)
+con=pamdbConnect("poc_v2",keyscript,clientkey,clientcert)
 
  #look at deployments currently loaded, ponder if loading it all up to postgres is a good idea:
 
@@ -198,90 +198,8 @@ test$strength = 'tight' #need to add manually.
 test$procedure=5
 
 
-lookup_from_match <- function(conn,tablename,vector,match_col,idname='id'){
-
-  id_and_name = paste(idname,match_col,sep=",")
-
-  if(length(vector)>1){
-    sf_id_lookup = paste("SELECT ",id_and_name," FROM ",tablename," WHERE ",match_col," IN",paste("(",paste("$",1:(length(vector)-1),collapse=",",sep=""),",$",length(vector),")",sep=""))
-  }else{
-    sf_id_lookup = paste("SELECT ",id_and_name," FROM ",tablename," WHERE ",match_col," IN",paste("($",length(vector),")",sep=""))
-  }
-
-  query1 <- dbSendQuery(conn, sf_id_lookup)
-  dbBind(query1, params=vector)
-
-  #dbCommit(conn)
-
-  res = dbFetch(query1)
-
-  dbClearResult(query1)
-
-  res[[idname]]=as.integer(res[[idname]])
-
-  return(res)
-
-}
 
 
-detx_to_db <- function(conn,dataset){
-
-  if(any(dataset$Type=='i_neg') | (!"Type" %in% colnames(dataset))){
-    #mandate type be included to prevent accidental upload of i_neg data
-    stop("protocol for i_neg not yet supported")
-  }
-
-  if((!"procedure" %in% colnames(dataset)) | (!"strength" %in% colnames(dataset))){
-
-    stop("missing procedure or strength column")
-
-  }
-
-  if("LastAnalyst" %in% colnames(dataset) & (!"analyst" %in% colnames(dataset))){
-
-    dataset$analyst = dataset$LastAnalyst
-    dataset$LastAnalyst=NULL
-  }
-
-  #ids for soundfiles:
-  sf_ids = lookup_from_match(con,"soundfiles",unique(c(dataset$StartFile,dataset$EndFile)),"name")
-  dataset$StartFile = sf_ids$id[match(dataset$StartFile,sf_ids$name)]
-  dataset$EndFile = sf_ids$id[match(dataset$EndFile,sf_ids$name)]
-
-  #ids for label
-  lab_id = lookup_from_match(con,"label_codes",dataset$label,"alias")
-  dataset$label = lab_id$id[match(dataset$label,lab_id$alias)]
-
-  #ids for signal_code
-  sigcode_id = lookup_from_match(con,"signals",dataset$SignalCode,"code")
-  dataset$SignalCode = sigcode_id$id[match(dataset$SignalCode,sigcode_id$code)]
-
-  #ids for signal_code
-  strength_id = lookup_from_match(con,"strength_codes",dataset$strength,"name")
-  dataset$strength = strength_id$id[match(dataset$strength,strength_id$name)]
-
-  if("analyst" %in% colnames(dataset)){
-
-    #ids for lastanalyst
-    pers_id = lookup_from_match(con,"personnel",dataset$analyst,"code")
-    dataset$analyst = pers_id$id[match(dataset$analyst,pers_id$code)]
-
-  }
-
-
-  dataset$VisibleHz=NULL
-  dataset$LastAnalyst=NULL
-  dataset$Type= NULL
-  dataset$id = NULL
-
-  colnames(dataset)[match(c("StartTime","EndTime","LowFreq","HighFreq","StartFile","EndFile","Comments","probs","SignalCode"),
-                          colnames(dataset))]=c("start_time","end_time","low_freq","high_freq","start_file","end_file","comments","probability","signal_code")
-
-  dataset$comments[which(is.na(dataset$comments))]=""
-
-  return(dataset)
-
-}
 
 
 #query2 <- gsub("[\r\n]", "", query2)
@@ -413,6 +331,186 @@ count_dbLMs = dbFetch(dbSendQuery(con,"SELECT COUNT(*) FROM detections WHERE sta
 
 #this will update the sql dataset using an R dataset. requires column names of R dataset to be identical.
 
+#try to upload first cole data (assume cole origin), then modify it and resubmit.
+
+og_analyst = test3$LastAnalyst
+
+test3$LastAnalyst="CTW"
+
+dbdata = detx_to_db(con,test3)
+
+ids = table_insert(con,"detections",dbdata)
+
+test3$LastAnalyst=og_analyst
+
+dbdata2 = detx_to_db(con,test3)
+
+dbdata2 = data.frame(ids,dbdata2)
+
+table_update(con,"detections",dbdata2[,c("id","analyst")])
+
+#we can get the original set, by querying for the analysis/effort, and then in R- taking the "oldest 2 of every duplicated og_id"
+
+dbLMs = dbFetch(dbSendQuery(con,"SELECT * FROM detections;"))
+
+#maybe instead of below try to design the query in SQL.
+
+#test_query = "SELECT id,start_time,end_time,low_freq,high_freq,start_file,
+#end_file,probability,comments,procedure,label,signal_code,strength,
+#MIN(modified),analyst,original_id FROM detections GROUP BY original_id
+#"
+
+test_query = "SELECT original_id,MIN(modified) FROM detections GROUP BY original_id"
+
+test_query <- gsub("[\r\n]", " ", test_query)
+
+#oldest_dets = dbFetch(dbSendQuery(con,test_query))
+
+test_query = "SELECT * FROM detections t1
+WHERE modified = ( SELECT MIN( t2.modified )
+                FROM detections t2
+                WHERE t1.original_id = t2.original_id )"
+
+test_query <- gsub("[\r\n]", " ", test_query)
+
+oldest_dets = dbFetch(dbSendQuery(con,test_query))
+
+current_dets = dbFetch(dbSendQuery(con,"SELECT * FROM detections WHERE status = 1;"))
 
 
+#test: do a pheaux SC upload.
+
+#1st: query the bins from one of the moorings:
+
+query = "SELECT seg_start,seg_end,soundfiles_id,sampling_rate FROM bins
+JOIN soundfiles ON bins.soundfiles_id = soundfiles.id
+JOIN data_collection ON soundfiles.data_collection_id = data_collection.id
+WHERE data_collection.name = 'AW15_AU_BS02' AND bins.type=3" # LIMIT 100"
+
+query <- gsub("[\r\n]", " ", query)
+
+bins_tab = dbFetch(dbSendQuery(con,query))
+
+template_tab = dbFetch(dbSendQuery(con,"SELECT * FROM detections LIMIT 1"))
+
+template_tab = template_tab[0,which(!colnames(template_tab) %in% c("id","original_id","modified","analyst","status"))]
+
+#now populate the table
+
+bins_tab_full = data.frame(bins_tab[,c(1,2)],0,bins_tab[,4]/2,bins_tab[,3],bins_tab[,3],NA,'dummy data',0,sample(c(0,1),nrow(bins_tab),replace = TRUE),15,1)
+colnames(bins_tab_full) = colnames(template_tab)
+
+#first test: see how fast if don't need to return ids.
+
+#start at 4:47, end at 6:05 for 1 hr 18 minutes total.
+dbAppendTable(con,"detections" , bins_tab_full)
+
+#ok, clear out this test
+del_ids = dbFetch(dbSendQuery(con,"SELECT id FROM detections WHERE comments = 'dummy data'"))
+
+#start at 8:30, end at ???
+table_delete(con,'detections',del_ids$id,hard_delete = TRUE)
+
+#test out querying bin table wide.
+pres_bins_low = dbFetch(dbSendQuery(con,"SELECT * FROM bins WHERE lm = 1"))
+
+#create small dataset to test upload and delete speed.
+
+bins_tab_full_reduce = bins_tab_full[1:100,]
+bins_tab_full_reduce = bins_tab_full[1:200,]
+bins_tab_full_reduce = bins_tab_full[1:400,]
+bins_tab_full_reduce = bins_tab_full[1:1000,]
+
+#time smaller dataset (100 rows of 225s bins with randomly generated labels)
+#took 3.9624 seconds,4.25 seconds..
+#200 rows: took 8.441 seconds
+#400 rows: 16.63956 secs
+#1000 rows
+datainsert = data.frame(c(1000,5000,10000),c( 1.783661,7.121937,13.68139))
+
+#test with 1000 rows with bin relabel disabled lasted 37.47s
+#so- 37.47 of 41.923 secs of insert is dedicated to just det/bin calc!!
+#meaning, relabel bin likely not the focus.
+
+starttime = Sys.time()
+dbAppendTable(con,"detections" , bins_tab_full_reduce)
+enttime = Sys.time() - starttime
+
+dbFetch(dbSendQuery(con,"SELECT count(*) FROM bins where dk = 1"))
+dbFetch(dbSendQuery(con,"SELECT count(*) FROM bins where dk != 99"))
+dbFetch(dbSendQuery(con,"SELECT count(*) FROM detections"))
+dbFetch(dbSendQuery(con,"SELECT count(*) FROM bins_detections"))
+dbFetch(dbSendQuery(con,"SELECT count(*) FROM det_to_archive"))
+
+#now time delete operation
+#100 rows:
+#took 4.191708 secs,4.39 secs..
+#200 rows:
+# took: 8.675018 seconds
+#400 rows:
+# 17.55512 seconds
+#1000
+# 45.85782
+datadelete= data.frame(c(1000,5000,10000),c("?",6.680611,13.05972))
+starttime = Sys.time()
+dbSendQuery(con,"DELETE FROM detections")
+enttime = Sys.time() - starttime
+
+starttime = Sys.time()
+dbFetch(dbSendQuery(con,"SELECT id FROM bins where bins.soundfiles_id = 10440"))
+enttime = Sys.time() - starttime
+
+#test with 1000 rows with bin relabel disabled lasted 36.99141s
+#uhh, don't even have to recalc in delete- how does that make any sense?
+
+#given the above, we should take a look at decisions for det/bin calc?
+
+#so, insert takes 95% of time of deletion. See how that scales up with size. both seem to scale ok at this scale.
+
+#alright, starting with 0 triggers, turning them on 1 by 1.
+#no triggers solves the problem-
+#1000 rows in .2s. delete similarly fast.
+#turning on:
+#comp_to_bins_ins: 37.14697 secs. There it is!
+
+#so the problem with insert is comp_to_bins_ins. How about for delete?
+#I enabled all of the triggers it seems to need (ins triggers still disabled.). But it went super fast???
+#trying again- this time, upload with triggers, then delete with no insert triggers.
+#ok, something is definitely up! can't figure out what is making delete take so long.
+
+#try to disable just the archive detections... that did it!
+
+#So what did we learn?
+#The bottleneck is only in bin_recalc. Delete just also hits that bottleneck, since it triggers an insert.
+#strategies: bring down bin_recalc. optionally, can disable recalc for status 2 detections, and instead just hard input the old
+#old bins_detections values into bins_detections.In other words, only trigger recalc if necessary (positional columns change)
+
+#but if we can sharply reduce bin calculation, shouldn't be a problem.
+
+#seeing if I can optimize the above bottleneck query. One idea is to make a smaller table than bins, by removing species columns.
+
+#get the critical columns in bins:
+
+query = "SELECT id,soundfiles_id,seg_start,seg_end,type FROM bins"
+
+query <- gsub("[\r\n]", " ", query)
+
+bins_all = dbFetch(dbSendQuery(con,query))
+
+dbWriteTable(con, "bins_test", bins_all)
+
+#cool- using the smaller bins table saved ~8 seconds! That's big. So, we definitely at least want to divide up the tables.
+#for that, we will need a trigger which populates the one-to-one table when bins are created, as well as keeps ids consistent between
+#them.
+
+#the second, probably quite fruitful thing to try is to instead of do a per row query do a
+
+#try this query:
+
+query = "SELECT detections.id,detections.start_file,detections.end_file,detections.start_time,detections.end_time,bins.id,bins.seg_start,bins.seg_end FROM detections
+ JOIN bins ON detections.start_file = bins.soundfiles_id OR detections.end_file = bins.soundfiles_id"
+
+query <- gsub("[\r\n]", " ", query)
+
+test = dbFetch(dbSendQuery(con,query))
 
