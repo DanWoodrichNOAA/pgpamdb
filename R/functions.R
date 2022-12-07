@@ -346,7 +346,9 @@ table_update <-function(conn,tablename,dataset,colvector=NULL,idname = 'id'){
 table_delete <-function(conn,tablename,ids,idname = 'id',hard_delete=FALSE){
 
   if(length(ids)>1){
-    query = paste("DELETE FROM ",tablename," WHERE ",idname," IN",paste("(",paste(ids,collapse=",",sep=""),")",sep=""))
+    #query = paste("DELETE FROM ",tablename," WHERE ",idname," =ANY(Array [",paste(ids,collapse=",",sep=""),"])",sep="")
+    
+    query = paste("DELETE FROM ",tablename," WHERE ",idname," IN (",paste(ids,collapse=",",sep=""),")",sep="")
   }else{
     query = paste("DELETE FROM ",tablename," WHERE ",idname," IN",paste("(",ids,")",sep=""))
 
@@ -358,7 +360,8 @@ table_delete <-function(conn,tablename,ids,idname = 'id',hard_delete=FALSE){
     dbExecute(conn,query)
 
     if(length(ids)>1){
-      query = paste("DELETE FROM ",tablename," WHERE original_id IN",paste("(",paste(ids,collapse=",",sep=""),")",sep=""))
+      #query = paste("DELETE FROM ",tablename," WHERE original_id =ANY(Array [",paste(ids,collapse=",",sep=""),"])",sep="")
+      query = paste("DELETE FROM ",tablename," WHERE original_id IN (",paste(ids,collapse=",",sep=""),")",sep="")
     }else{
       query = paste("DELETE FROM ",tablename," WHERE original_id IN",paste("(",ids,")",sep=""))
 

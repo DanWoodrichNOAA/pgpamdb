@@ -3,7 +3,7 @@ library(RPostgres)
 library(foreach)
 library(tuneR)
 
-#setwd("C:/Users/daniel.woodrich/Desktop/pgpamdb")
+#setwd("C:/Apps/pgpamdb")
 
 source("./R/functions.R") #package under construction
 
@@ -471,7 +471,17 @@ enttime = Sys.time() - starttime
 
 #create an experiment where I load progressively more dummy data, and log duration of operations.
 
-moorings = c("AL16_AU_CL01","AW15_AU_BS02","AL20_AU_PM02-b","AW12_AU_KZ01","AW14_AU_BF03")
+moorings = c("AL16_AU_CL01","AW15_AU_BS02","AL20_AU_PM02-b","AW12_AU_KZ01","AW14_AU_BF03",
+             
+             "XB17_AM_PR01","RW10_EA_BS02","CZ11_AU_IC03-04","BS11_AU_PM05","BF10_AU_BF03",
+             "BF07_AU_BF05","AW15_AU_NM01","AW14_AU_BS02","AL21_AU_UM01","AL19_AU_NM01",
+             "AL16_AU_BS03","AW15_AU_WT01","BF07_AU_BF04","XB17_AU_LB01","XB17_AM_OG01")
+
+moorings = dir("//161.55.120.117/NMML_AcousticsData/Audio_Data/Waves")
+
+data_col = dbFetch(dbSendQuery(con,paste("SELECT name,sampling_rate from data_collection WHERE sampling_rate >0 and name IN ('",paste(moorings,collapse = "','",sep=""),"')",sep="")))
+
+moorings=data_col$name
 
 signal_tab =dbFetch(dbSendQuery(con,"SELECT * from signals"))
 
@@ -482,23 +492,46 @@ mooring = c()
 signal_code = c()
 bintype = c()
 time_per = c()
+total_time = c()
 
+moorings_done = dbFetch(dbSendQuery(con,"SELECT DISTINCT data_collection.name from soundfiles JOIN data_collection ON 
+                                     data_collection.id = soundfiles.data_collection_id"))
 
+moorings_to_go = moorings[-which(moorings %in% moorings_done$name)]
+
+#just moorings
+for(i in 1:length(moorings_to_go)){
+  
+  starttime = Sys.time()
+  val = load_soundfile_metadata(con,"//161.55.120.117/NMML_AcousticsData/Audio_Data/Waves",moorings_to_go[i])
+  endtime = difftime(Sys.time(),starttime,units="secs")
+  
+  mooring = c(mooring,moorings_to_go[i])
+  #signal_code = c(signal_code,97) #upload 'code' for now.
+  bintype = c(bintype,97)
+  time_per = c(time_per,endtime/val)
+  total_time = c(total_time,endtime)
+  
+  write.csv(data.frame(mooring,bintype,time_per,total_time),"outlog11.csv")
+  
+}
 
 
 for(i in 1:length(moorings)){
 
   starttime = Sys.time()
   val = load_soundfile_metadata(con,"//161.55.120.117/NMML_AcousticsData/Audio_Data/Waves",moorings[i])
-  endtime = Sys.time() - starttime
+  endtime = difftime(Sys.time(),starttime,units="secs")
 
   mooring = c(mooring,moorings[i])
-  signal_code = c(signal_code,97) #upload 'code' for now.
-  bintype = 97
-  time_per = endtime/val
+  #signal_code = c(signal_code,97) #upload 'code' for now.
+  bintype = c(bintype,97)
+  time_per = c(time_per,endtime/val)
+  total_time = c(total_time,endtime)
 
-  write.csv(data.frame(mooring,signal_code,bintype,time_per),"outlog.csv")
-
+  write.csv(data.frame(mooring,bintype,time_per,total_time),"outlog11.csv")
+  
+  
   #for every mooring, load up every bin
 
   for(n in 1:3){
@@ -506,7 +539,7 @@ for(i in 1:length(moorings)){
     query = paste("SELECT seg_start,seg_end,soundfiles_id,sampling_rate FROM bins
     JOIN soundfiles ON bins.soundfiles_id = soundfiles.id
     JOIN data_collection ON soundfiles.data_collection_id = data_collection.id
-    WHERE data_collection.name = ",moorings[i]," AND bins.type=",n,"",sep="")
+    WHERE data_collection.name = '",moorings[i],"' AND bins.type=",n,"",sep="")
 
     query <- gsub("[\r\n]", " ", query)
 
@@ -517,30 +550,59 @@ for(i in 1:length(moorings)){
     template_tab = template_tab[0,which(!colnames(template_tab) %in% c("id","original_id","modified","analyst","status"))]
 
     #now populate the table
+    
+    data_full = NULL
 
     for(p in 1:sum(n==all_binned$native_bin)){
 
       row = all_binned[which(n==all_binned$native_bin)[p],]
 
-      bins_tab_full = data.frame(bins_tab[,c(1,2)],0,bins_tab[,4]/2,bins_tab[,3],bins_tab[,3],NA,'dummy data',0,sample(c(0,1),nrow(bins_tab),replace = TRUE),row$id,1)
+      bins_tab_full = data.frame(bins_tab[,c(1,2)],0,bins_tab[,4]/2,bins_tab[,3],bins_tab[,3],NA,'dummy data',0,sample(c(0,1),nrow(bins_tab),replace = TRUE),as.integer(row$id),1)
       colnames(bins_tab_full) = colnames(template_tab)
+      
+      data_full = rbind(data_full,bins_tab_full)
 
-      starttime = Sys.time()
-      val = dbAppendTable(con,"detections" , bins_tab_full_reduce)
-      enttime = Sys.time() - starttime
+      #starttime = Sys.time()
+      #print(paste(n,as.integer(row$id),Sys.time()))
+      #val = dbAppendTable(con,"detections" , bins_tab_full)
+      #dbAppendTable(con,"detections" , bins_tab_full)
+      #endtime = difftime(Sys.time(),starttime,units="secs")
+      
+      #time difference with labeling: 0.001536158 secs
+      #time difference w/0 labeling: 0.0005130881 secs
+      #alright, so it looks like labeling is taking more time!
+      #after vacuum:  0.001557289 secs.. no effect :(
+      
+      #Time difference of 0.002097361 secs
+      #after staging: Time difference of 0.002038302 secs
 
-      mooring = c(mooring,moorings[i])
-      signal_code = c(signal_code,row$id) #upload 'code' for now.
-      bintype = n
-      time_per = endtime/val
+      #mooring = c(mooring,moorings[i])
+      #signal_code = c(signal_code,as.integer(row$id)) #upload 'code' for now.
+      #bintype = c(bintype,n)
+      #time_per = c(time_per,endtime/val)
+      #total_time = c(total_time,endtime)
 
-      write.csv(data.frame(mooring,signal_code,bintype,time_per),"outlog.csv")
+      #write.csv(data.frame(mooring,signal_code,bintype,time_per,total_time),"outlog9.csv")
+      
+      #dbSendQuery(con,"ANALYZE detections")
+      #dbSendQuery(con,"ANALYZE bins_detections")
 
     }
-
-
-
-
+    
+    
+    starttime = Sys.time()
+    print(paste(n,Sys.time()))
+    val = dbAppendTable(con,"detections" , data_full)
+    #dbAppendTable(con,"detections" , bins_tab_full)
+    endtime = difftime(Sys.time(),starttime,units="secs")
+    
+    mooring = c(mooring,moorings[i])
+    #signal_code = c(signal_code,as.integer(row$id)) #upload 'code' for now.
+    bintype = c(bintype,n)
+    time_per = c(time_per,endtime/val)
+    total_time = c(total_time,endtime)
+    
+    write.csv(data.frame(mooring,bintype,time_per,total_time),"outlog10.csv")
 
 
   }
@@ -549,37 +611,99 @@ for(i in 1:length(moorings)){
 }
 
 
+#interpret the data:
+
+rundata = read.csv("outlog3.csv")
+rundata = read.csv("outlog4.csv")
+rundata = read.csv("outlog5.csv")
+rundata = read.csv("outlog6.csv")
+rundata = read.csv("outlog7.csv")
+rundata = read.csv("outlog9.csv")
+
+rundata$vals = as.integer(rundata$total_time/rundata$time_per)
+
+
+rundata_nosf = rundata[which(rundata$bintype!=97),]
+
+rundata_sf = rundata[which(rundata$bintype==97),]
+
+plot(rundata_sf$X,rundata_sf$time_per)
+
+plot(rundata_nosf$X,rundata_nosf$time_per,col=factor(rundata_nosf$bintype))
 
 
 
 
 
 
+time_by_moor = aggregate(rundata$total_time,list(rundata$mooring),sum)
+
+plot(factor(time_by_moor$Group.1),time_by_moor$x)
+
+
+time_by_moor_nosf = aggregate(rundata_nosf$total_time,list(rundata_nosf$mooring),sum)
 
 
 
+plot(factor(time_by_moor_nosf$Group.1),time_by_moor_nosf$x)
 
 
 
+time_by_moor_nosf2 = aggregate(rundata_nosf$time_per,list(rundata_nosf$mooring),mean)
+
+time_by_moor_nosf2$order = c(1,3,4,5,2)
+
+plot(time_by_moor_nosf2$order,time_by_moor_nosf2$x)
+
+fit2 <- lm(order~poly(x,2,raw=TRUE), data=time_by_moor_nosf2)
+
+lines(1:5, fitted(fit2),col='red')
+
+abline(a=min(time_by_moor_nosf2$x)-0.000075, b=0.000065,col='red')
 
 
+time_by_moor_nosf$order = c(1,3,4,5,2)
+
+plot(time_by_moor_nosf$order,time_by_moor_nosf$x)
 
 
+#now try: delete the detections and soundfiles corresponding to first mooring (AL16_AU_CL01)
+
+query ="SELECT detections.id FROM data_collection
+JOIN soundfiles ON data_collection.id = soundfiles.data_collection_id JOIN
+detections ON detections.start_file = soundfiles.id OR detections.end_file = soundfiles.id WHERE
+data_collection.name = 'AL16_AU_CL01';"
 
 
+query <- gsub("[\r\n]", " ", query)
 
+ids_to_del = dbFetch(dbSendQuery(con,query))
 
+ids_to_del$id<-as.integer(ids_to_del$id)
 
+table_delete(con,"detections",ids_to_del$id,hard_delete = TRUE)
 
+query ="SELECT soundfiles.id FROM data_collection
+JOIN soundfiles ON data_collection.id = soundfiles.data_collection_id WHERE
+data_collection.name = 'AL16_AU_CL01';"
 
+query <- gsub("[\r\n]", " ", query)
 
+ids_to_del = dbFetch(dbSendQuery(con,query))
 
+ids_to_del$id<-as.integer(ids_to_del$id)
 
+idz = ids_to_del$id[2:length(ids_to_del$id)]
 
+starttime = Sys.time()
+table_delete(con,"soundfiles",ids_to_del$id[201:300])
+enttime = Sys.time() - starttime
 
+#alright, see if a rnomal query will do it, or just if it is for delete? 
 
-
-
+starttime = Sys.time()
+dbFetch(dbSendQuery(con,"SELECT COUNT(*) FROM bins_detections WHERE bins_id IN (SELECT id FROM bins WHERE soundfiles_id = 101)"))
+enttime = Sys.time() - starttime
 
 
 #test with 1000 rows with bin relabel disabled lasted 36.99141s
@@ -635,4 +759,53 @@ query = "SELECT detections.id,detections.start_file,detections.end_file,detectio
 query <- gsub("[\r\n]", " ", query)
 
 test = dbFetch(dbSendQuery(con,query))
+
+query <- gsub("[\r\n]", " ", "SELECT COUNT(*) FROM detections")
+dbFetch(dbSendQuery(con,query))
+
+query <- gsub("[\r\n]", " ", "SELECT id FROM detections LIMIT 10000")
+
+ids_to_del = dbFetch(dbSendQuery(con,query))
+
+#delete speed test: 9061512 starting detection rows. 
+
+starttime = Sys.time()
+#table_delete(con,"detections",ids_to_del$id,hard_delete = TRUE)
+dbFetch(dbSendQuery(con,'DELETE FROM detections WHERE id < 2000000'))
+dbFetch(dbSendQuery(con,'DELETE FROM detections WHERE original_id < 2000000'))
+enttime = Sys.time() - starttime
+
+#at 1000 (9061512 total dets): 14 rows per sec.
+#at 10000 (9060512 total dets):  rows per sec. 
+
+
+#test updating: 
+
+
+query <- gsub("[\r\n]", " ", "SELECT id,label FROM detections WHERE signal_code = 1 LIMIT 100000")
+ids_to_upd<-dbFetch(dbSendQuery(con,query))
+
+ids_to_upd$label = 1
+
+starttime = Sys.time()
+table_update(con,'detections',ids_to_upd)
+enttime = Sys.time() - starttime
+
+query <- gsub("[\r\n]", " ", "SELECT *FROM detections WHERE id = 1244449")
+sf_ids<-dbFetch(dbSendQuery(con,query))
+
+query <- gsub("[\r\n]", " ", paste("SELECT * FROM bin_label_wide WHERE id IN (",paste(sf_ids$start_file,collapse=",",sep=""),") LIMIT 100"))
+rslt<-dbFetch(dbSendQuery(con,query))
+
+#seems to be scaling ok. Didn't get a chance to test out the above thoroughly- so, probably need to still do testing. But looking good from a performance perspective.
+
+starttime1 = Sys.time()
+dbSendQuery(con,"DELETE FROM detections")
+enttime1 = Sys.time() - starttime1
+
+starttime2 = Sys.time()
+dbSendQuery(con,"DELETE FROM detections")
+enttime2 = Sys.time() - starttime2
+
+
 
