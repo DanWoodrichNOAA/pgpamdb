@@ -10,6 +10,8 @@ library(tuneR)
 
 source("./R/functions.R") #package under construction
 
+source("./R/fw_proj_functions.R") #package under construction
+
 source("./etc/paths.R") #populates connection paths which contain connection variables.
 
 con=pamdbConnect("poc_v2",keyscript,clientkey,clientcert)
