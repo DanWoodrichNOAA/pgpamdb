@@ -33,6 +33,123 @@ pamdbConnect<-function(dbname,infoScript,sslKey_path,sslCert_path){
 
 #DML and SQL operations.
 
+#' Query with table of values
+#'
+#' Query a user selected table or join of tables, using a dataset from R session. interpret as maps column names of R dataset, in
+#' order, to names of equivalent columns on database.
+#' @param conn The database connection
+#' @param from_db_query The query, including select and joins, which will be joined to user R dataset.
+#' @param dataset The R object to update, all columns must have equivalents in database table. Defaults to column names.
+#' @param data_types The postgresql target column data types. Must be provided and explicit.
+#' @param interpret_as Ordered vector which maps dataset columns to database (including join syntax, if required) columns
+#' @return a data frame corresponding to returned columns specified in 'from_db_query' argument
+#' @export
+table_dataset_lookup<-function(conn,from_db_query,dataset,data_types,interpret_as=NULL){
+
+  #SELECT * FROM answers
+  #JOIN (VALUES (4509, 'B'), (622, 'C'), (1066, 'D'), (4059, 'A'), (4740, 'A'))
+  #AS t (p,o)
+  #ON p = problem_id AND o = option
+
+  #
+  #from_db_query = "SELECT * FROM bins JOIN soundfiles ON soundfiles.id = bins.soundfiles_id JOIN data_collection ON soundfiles.data_collection_id = data_collection.id"
+  #dataset = format_fg_query
+  #data_types = c("timestamp","character varying","DOUBLE PRECISION","DOUBLE PRECISION")
+
+  if(!is.null(interpret_as)){
+    colnames(dataset) = interpret_as
+  }
+
+  #convert posixct to character:
+  for(i in 1:length(dataset)){
+    if(class(dataset[,i])[1] == "POSIXct"){
+      dataset[,i] = format(dataset[,i], format = "%Y-%m-%d %H:%M:%OS%z")
+    }
+  }
+
+  #
+  #from_db_query = "SELECT * FROM bins JOIN soundfiles ON soundfiles.id = bins.soundfiles_id JOIN data_collection ON soundfiles.data_collection_id = data_collection.id"
+
+  query1 = " JOIN (VALUES "
+
+  query3 = paste(") AS t (",paste(letters[1:length(dataset)],collapse=",",sep=""),") ON ",paste(paste(letters[1:length(dataset)],"=",colnames(dataset),sep=" "),collapse=" AND "),sep="")
+
+  #single transaction.
+  dbBegin(conn)
+
+  try({
+   #get data types
+   #dtypes = not sure if need
+
+   q2 = ""
+   ds_ser=as.vector(t(unlist(dataset)))
+   #generate sequence:
+   vals=list()
+   for(i in 1:nrow(dataset)){
+     vals[[i]] = seq(from = i, by = nrow(dataset),length.out = length(dataset))
+   }
+   vals=do.call("c",vals)
+
+   ds_by_row = ds_ser[vals]
+   item_count = 0
+   start_ind = 1
+   chunk = 1
+   segs = list()
+   for(i in 1:nrow(dataset)){
+     q2_sub = "("
+     for(j in 1:length(dataset)){
+       item_count = item_count+1
+       new_val = paste("$",item_count,"::",data_types[j],sep="")
+       if(j !=length(dataset)){
+         new_val=paste(new_val,",",sep="")
+       }else{
+         new_val=paste(new_val,")",sep="")
+       }
+       q2_sub= paste(q2_sub,new_val,sep="")
+     }
+
+     if(i ==nrow(dataset) | object.size(q2)> 75000){
+
+       q2 = paste(q2,q2_sub,sep="")
+
+       #query = paste("INSERT INTO",tablename,q1,"VALUES",q2,"returning",idname,";")
+       query =paste(from_db_query,query1,q2,query3,sep="")
+
+       segs[[chunk]] = dbFetch(dbBind(dbSendQuery(conn, query), params=ds_by_row[start_ind:(i*length(dataset))]))
+
+       start_ind = (i*length(dataset)) + 1
+
+       item_count = 0
+
+       chunk = chunk+1
+
+       q2 = ""
+
+     }else{
+       q2=paste(q2,q2_sub,",",sep="")
+
+     }
+
+   }
+
+  })
+
+  dbCommit(conn)
+
+  segs = do.call("rbind",segs)
+
+  #check that nrow is the same
+
+  if(nrow(segs)!=nrow(dataset)){
+
+    stop("Returned dataset not same nrow as query dataset")
+
+  }
+
+  return(segs)
+
+}
+
 #' Insert data into the database
 #'
 #' Insert data into a named database table. Assumes postgresql db with existing connection.
@@ -347,7 +464,7 @@ table_delete <-function(conn,tablename,ids,idname = 'id',hard_delete=FALSE){
 
   if(length(ids)>1){
     #query = paste("DELETE FROM ",tablename," WHERE ",idname," =ANY(Array [",paste(ids,collapse=",",sep=""),"])",sep="")
-    
+
     query = paste("DELETE FROM ",tablename," WHERE ",idname," IN (",paste(ids,collapse=",",sep=""),")",sep="")
   }else{
     query = paste("DELETE FROM ",tablename," WHERE ",idname," IN",paste("(",ids,")",sep=""))

@@ -472,7 +472,7 @@ enttime = Sys.time() - starttime
 #create an experiment where I load progressively more dummy data, and log duration of operations.
 
 moorings = c("AL16_AU_CL01","AW15_AU_BS02","AL20_AU_PM02-b","AW12_AU_KZ01","AW14_AU_BF03",
-             
+
              "XB17_AM_PR01","RW10_EA_BS02","CZ11_AU_IC03-04","BS11_AU_PM05","BF10_AU_BF03",
              "BF07_AU_BF05","AW15_AU_NM01","AW14_AU_BS02","AL21_AU_UM01","AL19_AU_NM01",
              "AL16_AU_BS03","AW15_AU_WT01","BF07_AU_BF04","XB17_AU_LB01","XB17_AM_OG01")
@@ -481,7 +481,7 @@ moorings = dir("//161.55.120.117/NMML_AcousticsData/Audio_Data/Waves")
 
 data_col = dbFetch(dbSendQuery(con,paste("SELECT name,sampling_rate from data_collection WHERE sampling_rate >0 and name IN ('",paste(moorings,collapse = "','",sep=""),"')",sep="")))
 
-moorings=data_col$name
+moorings_2=data_col$name
 
 signal_tab =dbFetch(dbSendQuery(con,"SELECT * from signals"))
 
@@ -494,26 +494,29 @@ bintype = c()
 time_per = c()
 total_time = c()
 
-moorings_done = dbFetch(dbSendQuery(con,"SELECT DISTINCT data_collection.name from soundfiles JOIN data_collection ON 
+moorings_done = dbFetch(dbSendQuery(con,"SELECT DISTINCT data_collection.name from soundfiles JOIN data_collection ON
                                      data_collection.id = soundfiles.data_collection_id"))
 
 moorings_to_go = moorings[-which(moorings %in% moorings_done$name)]
 
+#now find moorings which are not yet in data collection
+
+moorings_not_tracked = moorings[-which(moorings %in% moorings_2)]
 #just moorings
 for(i in 1:length(moorings_to_go)){
-  
+
   starttime = Sys.time()
   val = load_soundfile_metadata(con,"//161.55.120.117/NMML_AcousticsData/Audio_Data/Waves",moorings_to_go[i])
   endtime = difftime(Sys.time(),starttime,units="secs")
-  
+
   mooring = c(mooring,moorings_to_go[i])
   #signal_code = c(signal_code,97) #upload 'code' for now.
   bintype = c(bintype,97)
   time_per = c(time_per,endtime/val)
   total_time = c(total_time,endtime)
-  
+
   write.csv(data.frame(mooring,bintype,time_per,total_time),"outlog11.csv")
-  
+
 }
 
 
@@ -530,8 +533,8 @@ for(i in 1:length(moorings)){
   total_time = c(total_time,endtime)
 
   write.csv(data.frame(mooring,bintype,time_per,total_time),"outlog11.csv")
-  
-  
+
+
   #for every mooring, load up every bin
 
   for(n in 1:3){
@@ -550,7 +553,7 @@ for(i in 1:length(moorings)){
     template_tab = template_tab[0,which(!colnames(template_tab) %in% c("id","original_id","modified","analyst","status"))]
 
     #now populate the table
-    
+
     data_full = NULL
 
     for(p in 1:sum(n==all_binned$native_bin)){
@@ -559,7 +562,7 @@ for(i in 1:length(moorings)){
 
       bins_tab_full = data.frame(bins_tab[,c(1,2)],0,bins_tab[,4]/2,bins_tab[,3],bins_tab[,3],NA,'dummy data',0,sample(c(0,1),nrow(bins_tab),replace = TRUE),as.integer(row$id),1)
       colnames(bins_tab_full) = colnames(template_tab)
-      
+
       data_full = rbind(data_full,bins_tab_full)
 
       #starttime = Sys.time()
@@ -567,12 +570,12 @@ for(i in 1:length(moorings)){
       #val = dbAppendTable(con,"detections" , bins_tab_full)
       #dbAppendTable(con,"detections" , bins_tab_full)
       #endtime = difftime(Sys.time(),starttime,units="secs")
-      
+
       #time difference with labeling: 0.001536158 secs
       #time difference w/0 labeling: 0.0005130881 secs
       #alright, so it looks like labeling is taking more time!
       #after vacuum:  0.001557289 secs.. no effect :(
-      
+
       #Time difference of 0.002097361 secs
       #after staging: Time difference of 0.002038302 secs
 
@@ -583,25 +586,25 @@ for(i in 1:length(moorings)){
       #total_time = c(total_time,endtime)
 
       #write.csv(data.frame(mooring,signal_code,bintype,time_per,total_time),"outlog9.csv")
-      
+
       #dbSendQuery(con,"ANALYZE detections")
       #dbSendQuery(con,"ANALYZE bins_detections")
 
     }
-    
-    
+
+
     starttime = Sys.time()
     print(paste(n,Sys.time()))
     val = dbAppendTable(con,"detections" , data_full)
     #dbAppendTable(con,"detections" , bins_tab_full)
     endtime = difftime(Sys.time(),starttime,units="secs")
-    
+
     mooring = c(mooring,moorings[i])
     #signal_code = c(signal_code,as.integer(row$id)) #upload 'code' for now.
     bintype = c(bintype,n)
     time_per = c(time_per,endtime/val)
     total_time = c(total_time,endtime)
-    
+
     write.csv(data.frame(mooring,bintype,time_per,total_time),"outlog10.csv")
 
 
@@ -699,7 +702,7 @@ starttime = Sys.time()
 table_delete(con,"soundfiles",ids_to_del$id[201:300])
 enttime = Sys.time() - starttime
 
-#alright, see if a rnomal query will do it, or just if it is for delete? 
+#alright, see if a rnomal query will do it, or just if it is for delete?
 
 starttime = Sys.time()
 dbFetch(dbSendQuery(con,"SELECT COUNT(*) FROM bins_detections WHERE bins_id IN (SELECT id FROM bins WHERE soundfiles_id = 101)"))
@@ -767,7 +770,7 @@ query <- gsub("[\r\n]", " ", "SELECT id FROM detections LIMIT 10000")
 
 ids_to_del = dbFetch(dbSendQuery(con,query))
 
-#delete speed test: 9061512 starting detection rows. 
+#delete speed test: 9061512 starting detection rows.
 
 starttime = Sys.time()
 #table_delete(con,"detections",ids_to_del$id,hard_delete = TRUE)
@@ -776,10 +779,10 @@ dbFetch(dbSendQuery(con,'DELETE FROM detections WHERE original_id < 2000000'))
 enttime = Sys.time() - starttime
 
 #at 1000 (9061512 total dets): 14 rows per sec.
-#at 10000 (9060512 total dets):  rows per sec. 
+#at 10000 (9060512 total dets):  rows per sec.
 
 
-#test updating: 
+#test updating:
 
 
 query <- gsub("[\r\n]", " ", "SELECT id,label FROM detections WHERE signal_code = 1 LIMIT 100000")
@@ -807,5 +810,52 @@ starttime2 = Sys.time()
 dbSendQuery(con,"DELETE FROM detections")
 enttime2 = Sys.time() - starttime2
 
+#try to delete a bin:
+
+table_delete(con,'bins',1)
+
+dbuddy_fgs=data_pull("SELECT * FROM filegroups;")
+
+#extract FG info from bins
+
+test_fg=data_pull("SELECT bins.*,soundfiles.DateTime,soundfiles.deployments_name FROM bins JOIN bins_filegroups ON bins.id = bins_filegroups.bins_id JOIN filegroups ON bins_filegroups.FG_name = filegroups.Name JOIN soundfiles ON bins.FileName= soundfiles.Name WHERE filegroups.Name = 'BS15_AU_PM02-a_files_1-104_rw_hg';")
+
+format_fg_query = data.frame(as.POSIXct(test_fg$DateTime,tz='utc'),test_fg$deployments_name,test_fg$SegStart,test_fg$SegStart+test_fg$SegDur)
+#so to associate to db, need to lookup by date, mooring id,
+
+colnames(format_fg_query) = c("soundfiles.datetime","data_collection.name","bins.seg_start","bins.seg_end")
+#Here is a template to do this sort of thing:
+
+out = table_dataset_lookup(con,"SELECT bins.*,soundfiles.datetime,data_collection.name,a,b,c,d FROM bins JOIN soundfiles ON soundfiles.id = bins.soundfiles_id JOIN data_collection ON soundfiles.data_collection_id = data_collection.id"
+                           ,format_fg_query,c("timestamp","character varying","DOUBLE PRECISION","DOUBLE PRECISION"))
 
 
+#looks like it worked. so, just associate ids
+
+fg_ids = as.integer(out$id)
+
+fg_tab = data.frame(fg_ids,1)
+colnames(fg_tab)=c("bins_id","effort_id")
+
+dbAppendTable(con,"bins_effort",fg_tab)
+
+#need to populate sampling rate for moorings which don't have it in data collection
+
+root = "//161.55.120.117/NMML_AcousticsData/Audio_Data/Waves"
+
+
+
+missing_meta = dbFetch(dbSendQuery(con,"SELECT id,name,sampling_rate from data_collection WHERE sampling_rate IS NULL "))
+out = c()
+for(i in 1:nrow(missing_meta)){
+
+  path= paste(root,missing_meta$name[i],sep="/")
+
+  sr = readWave(dir(dir(path,full.names = TRUE)[1],full.names = TRUE)[1],header=TRUE)$sample.rate
+
+  out = c(out,sr)
+}
+
+missing_meta$sampling_rate = out
+
+table_update(con,'data_collection',missing_meta[,c(1,3)])
