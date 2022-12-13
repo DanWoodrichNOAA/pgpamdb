@@ -481,7 +481,7 @@ moorings = dir("//161.55.120.117/NMML_AcousticsData/Audio_Data/Waves")
 
 data_col = dbFetch(dbSendQuery(con,paste("SELECT name,sampling_rate from data_collection WHERE sampling_rate >0 and name IN ('",paste(moorings,collapse = "','",sep=""),"')",sep="")))
 
-moorings_2=data_col$name
+moorings=data_col$name
 
 signal_tab =dbFetch(dbSendQuery(con,"SELECT * from signals"))
 
@@ -501,7 +501,7 @@ moorings_to_go = moorings[-which(moorings %in% moorings_done$name)]
 
 #now find moorings which are not yet in data collection
 
-moorings_not_tracked = moorings[-which(moorings %in% moorings_2)]
+#moorings_not_tracked = moorings[-which(moorings %in% moorings_2)]
 #just moorings
 for(i in 1:length(moorings_to_go)){
 
@@ -515,7 +515,7 @@ for(i in 1:length(moorings_to_go)){
   time_per = c(time_per,endtime/val)
   total_time = c(total_time,endtime)
 
-  write.csv(data.frame(mooring,bintype,time_per,total_time),"outlog11.csv")
+  write.csv(data.frame(mooring,bintype,time_per,total_time),"outlog12.csv")
 
 }
 
@@ -850,12 +850,27 @@ out = c()
 for(i in 1:nrow(missing_meta)){
 
   path= paste(root,missing_meta$name[i],sep="/")
+  
+  if(file.exists(dir(dir(path,full.names = TRUE)[1],full.names = TRUE)[1])){
+    sr = readWave(dir(dir(path,full.names = TRUE)[1],full.names = TRUE)[1],header=TRUE)$sample.rate
+  }else{
+    sr = NA
+  }
 
-  sr = readWave(dir(dir(path,full.names = TRUE)[1],full.names = TRUE)[1],header=TRUE)$sample.rate
+  
 
   out = c(out,sr)
 }
 
 missing_meta$sampling_rate = out
 
+missing_meta = missing_meta[which(!is.na(missing_meta$sampling_rate)),]
+
 table_update(con,'data_collection',missing_meta[,c(1,3)])
+
+#add in moorings_not_tracked
+
+moorings_not_tracked_ds=data.frame(moorings_not_tracked)
+colnames(moorings_not_tracked_ds)= "name"
+
+dbAppendTable(con,"data_collection",moorings_not_tracked_ds)
