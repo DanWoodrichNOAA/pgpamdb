@@ -455,7 +455,6 @@ table_update <-function(conn,tablename,dataset,colvector=NULL,idname = 'id'){
 #' @param conn The database connection
 #' @param tablename The name of the data table in the database
 #' @param ids The id vector to delete. All rows with id in vector will be deleted.
-#' @param colvector Vector which specifies specific columns from dataset to update: otherwise assumes all matching column names from dataset to be updated
 #' @param idname character string specifying name of primary key.
 #' @param hard_delete bool specifying whether to 'hard delete', refering to the archiving behavior of detections table on first delete. Only does anything if tablename = 'detections'
 #' @return result
@@ -608,26 +607,26 @@ detx_to_db <- function(conn,dataset){
   }
 
   #ids for soundfiles:
-  sf_ids = lookup_from_match(con,"soundfiles",unique(c(dataset$StartFile,dataset$EndFile)),"name")
+  sf_ids = lookup_from_match(conn,"soundfiles",unique(c(dataset$StartFile,dataset$EndFile)),"name")
   dataset$StartFile = sf_ids$id[match(dataset$StartFile,sf_ids$name)]
   dataset$EndFile = sf_ids$id[match(dataset$EndFile,sf_ids$name)]
 
   #ids for label
-  lab_id = lookup_from_match(con,"label_codes",dataset$label,"alias")
+  lab_id = lookup_from_match(conn,"label_codes",dataset$label,"alias")
   dataset$label = lab_id$id[match(dataset$label,lab_id$alias)]
 
   #ids for signal_code
-  sigcode_id = lookup_from_match(con,"signals",dataset$SignalCode,"code")
+  sigcode_id = lookup_from_match(conn,"signals",dataset$SignalCode,"code")
   dataset$SignalCode = sigcode_id$id[match(dataset$SignalCode,sigcode_id$code)]
 
   #ids for signal_code
-  strength_id = lookup_from_match(con,"strength_codes",dataset$strength,"name")
+  strength_id = lookup_from_match(conn,"strength_codes",dataset$strength,"name")
   dataset$strength = strength_id$id[match(dataset$strength,strength_id$name)]
 
   if("analyst" %in% colnames(dataset)){
 
     #ids for lastanalyst
-    pers_id = lookup_from_match(con,"personnel",dataset$analyst,"code")
+    pers_id = lookup_from_match(conn,"personnel",dataset$analyst,"code")
     dataset$analyst = pers_id$id[match(dataset$analyst,pers_id$code)]
 
   }
@@ -652,5 +651,6 @@ detx_to_db <- function(conn,dataset){
 #' @import RPostgres
 #' @import foreach
 #' @import tuneR
+#' @import utils
 NULL
 

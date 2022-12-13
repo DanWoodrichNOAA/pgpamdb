@@ -1,69 +1,13 @@
-library(DbuddyTools)
-library(RPostgres)
-library(foreach)
-library(tuneR)
 
+#fw proj functions
 
-
-
-#setwd("C:/Apps/pgpamdb")
-
-source("./R/functions.R") #package under construction
-
-source("./etc/paths.R") #populates connection paths which contain connection variables.
-
-con=pamdbConnect("poc_v2",keyscript,clientkey,clientcert)
-
-
-#this script will
-#inventory data ready to be loaded in ANALYSIS
-#using SF metadata in db, calculate 'protocol negatives' between protocol positives
-#using 'markingstab' data structure, set max probably detection of hr '2' per vec to human yes/no
-#submit detections to db
-
-#inventory data to be loaded in ANALYSIS
-
-#all possible mooring names
-possible_moor_names = dbFetch(dbSendQuery(con,"SELECT name,historic_name FROM data_collection"))
-lookup=possible_moor_names
-possible_moor_names = c(possible_moor_names$name,possible_moor_names$historic_name)
-possible_moor_names=possible_moor_names[!is.na(possible_moor_names)]
-possible_moor_names=possible_moor_names[!duplicated(possible_moor_names)]
-
-
-
-#Search ANALYSIS for these names:
-
-moor_on_ANALYSIS = dir("//nmfs/akc-nmml/CAEP/Acoustics/ANALYSIS")
-
-moor_on_ANALYSIS=moor_on_ANALYSIS[which(moor_on_ANALYSIS %in% possible_moor_names)]
-
-#great. Now of moor_on_ANALYSIS, check which has correct folder and markings tab
-
-has_folder = dir.exists(paste("//nmfs/akc-nmml/CAEP/Acoustics/ANALYSIS/",moor_on_ANALYSIS,
-                              "/Detector/TPRthresh_0.99/FD",sep=""))
-
-has_file1 = file.exists(paste("//nmfs/akc-nmml/CAEP/Acoustics/ANALYSIS/",moor_on_ANALYSIS,
-                              "/Detector/TPRthresh_0.99/FD/",moor_on_ANALYSIS,"_MarkingsTab.txt",sep=""))
-
-newnames = lookup$name[which(lookup$name %in% moor_on_ANALYSIS)]
-correspond_oldnames = lookup$historic_name[which(lookup$name %in% newnames)]
-
-newnames = newnames[which(!is.na(correspond_oldnames))]
-correspond_oldnames = correspond_oldnames[which(!is.na(correspond_oldnames))]
-
-has_file2 = file.exists(paste("//nmfs/akc-nmml/CAEP/Acoustics/ANALYSIS/",newnames,
-                              "/Detector/TPRthresh_0.99/FD/",correspond_oldnames,"_MarkingsTab.txt",sep=""))
-
-#first, going to upload data which has marking tab- which seems like maybe all the data?
-#the only quirk, is that some of the data has old name- handle this by determining if file exists,
-#and if not, load the other one.
-
-#currently loaded moorings:
-
-moorings_done = dbFetch(dbSendQuery(con,"SELECT DISTINCT data_collection.name from soundfiles JOIN data_collection ON
-                                     data_collection.id = soundfiles.data_collection_id"))
-
+#' Format FW data on ANALYSIS
+#'
+#' Format the FW data on ANALYSIS into a db ready format
+#' @param conn The database connection
+#' @param mooringname The name of the dataset as on ANALYSIS. Can be new naming or old naming convention (must match data_collection.name or data_collection.historic_name)
+#' @return a dataframe ready to be loaded into db.
+#' @export
 format_FW = function(conn,mooringname){
 
   #determine if results exists
@@ -92,7 +36,7 @@ format_FW = function(conn,mooringname){
   }
 
   if(file.exists(paste("//nmfs/akc-nmml/CAEP/Acoustics/ANALYSIS/",mooringname,
-                        "/Detector/TPRthresh_0.99/FD/",newname,"_MarkingsTab.txt",sep=""))){
+                       "/Detector/TPRthresh_0.99/FD/",newname,"_MarkingsTab.txt",sep=""))){
 
     FNdat =read.delim(paste("//nmfs/akc-nmml/CAEP/Acoustics/ANALYSIS/",mooringname,
                             "/Detector/TPRthresh_0.99/FN/",newname,"_files_All_FN_Model_Applied_probs.txt",sep=""))
@@ -101,9 +45,9 @@ format_FW = function(conn,mooringname){
                             "/Detector/TPRthresh_0.99/BB/",newname,"_files_All_BB_Model_Applied_probs.txt",sep=""))
 
     FDreslt = read.delim(paste("//nmfs/akc-nmml/CAEP/Acoustics/ANALYSIS/",mooringname,
-                             "/Detector/TPRthresh_0.99/FD/",newname,"_files_All_FD_Model_Applied_probs.txt",sep=""))
+                               "/Detector/TPRthresh_0.99/FD/",newname,"_files_All_FD_Model_Applied_probs.txt",sep=""))
     MarkTab = read.delim(paste("//nmfs/akc-nmml/CAEP/Acoustics/ANALYSIS/",mooringname,
-                       "/Detector/TPRthresh_0.99/FD/",newname,"_MarkingsTab.txt",sep=""))
+                               "/Detector/TPRthresh_0.99/FD/",newname,"_MarkingsTab.txt",sep=""))
   }else{
 
     FNdat =read.delim(paste("//nmfs/akc-nmml/CAEP/Acoustics/ANALYSIS/",mooringname,
@@ -113,9 +57,9 @@ format_FW = function(conn,mooringname){
                             "/Detector/TPRthresh_0.99/BB/",oldname,"_files_All_BB_Model_Applied_probs.txt",sep=""))
 
     FDreslt = read.delim(paste("//nmfs/akc-nmml/CAEP/Acoustics/ANALYSIS/",mooringname,
-                             "/Detector/TPRthresh_0.99/FD/",oldname,"_files_All_FD_Model_Applied_probs.txt",sep=""))
+                               "/Detector/TPRthresh_0.99/FD/",oldname,"_files_All_FD_Model_Applied_probs.txt",sep=""))
     MarkTab = read.delim(paste("//nmfs/akc-nmml/CAEP/Acoustics/ANALYSIS/",mooringname,
-                             "/Detector/TPRthresh_0.99/FD/",oldname,"_MarkingsTab.txt",sep=""))
+                               "/Detector/TPRthresh_0.99/FD/",oldname,"_MarkingsTab.txt",sep=""))
   }
 
   FNdat = FNdat[which(FNdat$FN.prob>=.91),]
@@ -322,47 +266,47 @@ format_FW = function(conn,mooringname){
     for(i in 1:nrow(sf_info_w_dets)){
 
 
-        #thinking here- I think that instead of filling negative space, I should just create
-        #FW n detections on the low bin scale. Reason being, is that there will be fewer errors to correct
-        #since there was no expectation that yeses would be comprehensive, just comprehensive on the low bin time scale.
-        #i could perhaps submit FW y detections, but a little redundant for most cases- but it would make comparisons easier.
-        #don't think that's worth it, since it creates a lot of detections to maintain (redundantly) and I could just do this
-        #same comparison on the other end.
+      #thinking here- I think that instead of filling negative space, I should just create
+      #FW n detections on the low bin scale. Reason being, is that there will be fewer errors to correct
+      #since there was no expectation that yeses would be comprehensive, just comprehensive on the low bin time scale.
+      #i could perhaps submit FW y detections, but a little redundant for most cases- but it would make comparisons easier.
+      #don't think that's worth it, since it creates a lot of detections to maintain (redundantly) and I could just do this
+      #same comparison on the other end.
 
-        #subset detections in sound file (don't forget to find overlapping start and ends)
-        #create detections based on intervals
+      #subset detections in sound file (don't forget to find overlapping start and ends)
+      #create detections based on intervals
 
-        endtimes = onlyyes[which(onlyyes$end_file==sf_info_w_dets$id[i]),"end_time"]
-        starttimes = onlyyes[which(onlyyes$start_file==sf_info_w_dets$id[i]),"start_time"]
+      endtimes = onlyyes[which(onlyyes$end_file==sf_info_w_dets$id[i]),"end_time"]
+      starttimes = onlyyes[which(onlyyes$start_file==sf_info_w_dets$id[i]),"start_time"]
 
-        #want to stay at LOW bin size for consistency- so,
-        bins = seq(from=0,to=sf_info_w_dets$duration[i],by=300)
+      #want to stay at LOW bin size for consistency- so,
+      bins = seq(from=0,to=sf_info_w_dets$duration[i],by=300)
 
-        bins= bins[which(bins!=sf_info_w_dets$duration[i])]
+      bins= bins[which(bins!=sf_info_w_dets$duration[i])]
 
-        yes_bins = unique(findInterval(c(endtimes,starttimes),bins))
-        no_bins = bins[-yes_bins]
+      yes_bins = unique(findInterval(c(endtimes,starttimes),bins))
+      no_bins = bins[-yes_bins]
 
-        if(length(no_bins)>0){
+      if(length(no_bins)>0){
 
-          intab = list()
+        intab = list()
 
-          for(j in 1:length(no_bins)){
+        for(j in 1:length(no_bins)){
 
-            inrow = c(no_bins[j],no_bins[j]+300,0,64,sf_info_w_dets$id[i],sf_info_w_dets$id[i],NA,"",7,20,ct_lookup$id[which(ct_lookup$code=="FW")],1)
-            intab[[j]]=inrow
-          }
-
-          intab = do.call('rbind',intab)
-
-          #make sure bins don't exceed duration
-          intab[,2][which(intab[,2]>sf_info_w_dets$duration[i])]=sf_info_w_dets$duration[i]
-
-          rows[[counter]] = intab
-
-          counter = counter + 1
-
+          inrow = c(no_bins[j],no_bins[j]+300,0,64,sf_info_w_dets$id[i],sf_info_w_dets$id[i],NA,"",7,20,ct_lookup$id[which(ct_lookup$code=="FW")],1)
+          intab[[j]]=inrow
         }
+
+        intab = do.call('rbind',intab)
+
+        #make sure bins don't exceed duration
+        intab[,2][which(intab[,2]>sf_info_w_dets$duration[i])]=sf_info_w_dets$duration[i]
+
+        rows[[counter]] = intab
+
+        counter = counter + 1
+
+      }
 
     }
 
@@ -402,7 +346,14 @@ format_FW = function(conn,mooringname){
 
 #3.\\akc0ss-n086\NMML_CAEP_Acoustics\Detector\DetectorRunOutput\FinReview_20200817090230
 
-
+#' Check FW labels
+#'
+#' Check FW labels against original labels
+#' @param conn The database connection
+#' @param calcdata data output from format_FW
+#' @param original_folder the folder name containing original labels (output folder for FinReview.R)
+#' @return a table which shows original and back calculated labels side by side
+#' @export
 FN_validate = function(conn,calcdata,original_folder){
 
   labtab_bc = calcdata[which((calcdata$label %in% c(0,1)) & (calcdata$signal_code %in% c(5,6))),]
@@ -459,57 +410,5 @@ FN_validate = function(conn,calcdata,original_folder){
 
 }
 
-output = format_FW(con,"BS17_AU_02a")
-test = FN_validate(con,output,"//akc0ss-n086/NMML_CAEP_Acoustics/Detector/DetectorRunOutput/FinReview_20200817090230")
-
-output = format_FW(con,"IP18_AU_CH01")
-test = FN_validate(con,output,"//akc0ss-n086/NMML_CAEP_Acoustics/Detector/DetectorRunOutput/FinReview_20220217091410")
-
-#try loading this one up
-start = Sys.time()
-dbAppendTable(con,'detections',output)
-end = Sys.time()
-#3.685126 minutes for this
-
-#alright- look into the results, on the database.
-
-#the procedure makes it so there should be no 99s in bin_table_wide. Check that (and, make into function!)
-
-query = paste("SELECT COUNT(*) FROM data_collection JOIN soundfiles ON data_collection.id = soundfiles.data_collection_id
-JOIN bins ON soundfiles.id = bins.soundfiles_id JOIN bin_label_wide on bins.id = bin_label_wide.id WHERE bins.type = 1
-AND data_collection.name = '","IP18_AU_CH01","' AND bin_label_wide.fw != 99",sep="")
-
-query <- gsub("[\r\n]", " ",query)
-rslt =dbFetch(dbSendQuery(con,query))
-
-#check everything gets properly deleted (only the IP18_AU_CH01 mooring uploaded):
-start = Sys.time()
-dbFetch(dbSendQuery(con,"DELETE FROM detections"))
-dbFetch(dbSendQuery(con,"DELETE FROM detections"))
-end = Sys.time()
-#
-
-output = format_FW(con,"BS19_AU_PM08")
-test = FN_validate(con,output,"//akc0ss-n086/NMML_CAEP_Acoustics/Detector/DetectorRunOutput/FinReview_20210421092358")
-
-
-
-
-output = format_FW(con,"AL19_AU_IC01")
-test = FN_validate(con,output,"//akc0ss-n086/NMML_CAEP_Acoustics/Detector/DetectorRunOutput/FinReview_20210421094053")
-
-output = format_FW(con,"IP19_AU_CH01")
-test = FN_validate(con,output,"//akc0ss-n086/NMML_CAEP_Acoustics/Detector/DetectorRunOutput/FinReview_20210421111402")
-
-#this one seems like it was done in error: file 2 missing responses on BB. Fix!
-output = format_FW(con,"AL19_AU_BS10")
-test = FN_validate(con,output,"//akc0ss-n086/NMML_CAEP_Acoustics/Detector/DetectorRunOutput/FinReview_20210810132417")
-
-output = format_FW(con,"BS19_AU_PM02-b")
-test = FN_validate(con,output,"//akc0ss-n086/NMML_CAEP_Acoustics/Detector/DetectorRunOutput/FinReview_20210810171333")
-
-output = format_FW(con,"AL20_AU_PM02-b")
-test = FN_validate(con,output,"//akc0ss-n086/NMML_CAEP_Acoustics/Detector/DetectorRunOutput/FinReview_20210811135039")
-
-#looks pretty good! Try out loading one up.
-
+#' @import utils
+NULL
