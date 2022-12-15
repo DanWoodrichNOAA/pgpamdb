@@ -77,7 +77,8 @@ test = FN_validate(con,output,"//akc0ss-n086/NMML_CAEP_Acoustics/Detector/Detect
 #try loading this one up
 start = Sys.time()
 dbAppendTable(con,'detections',output)
-end = Sys.time()
+endtime = difftime(Sys.time(),starttime,units="secs")
+print(endtime)
 #3.685126 minutes for this
 
 #alright- look into the results, on the database.
@@ -121,4 +122,21 @@ output = format_FW(con,"AL20_AU_PM02-b")
 test = FN_validate(con,output,"//akc0ss-n086/NMML_CAEP_Acoustics/Detector/DetectorRunOutput/FinReview_20210811135039")
 
 #looks pretty good! Try out loading one up.
+
+initial_moorings = c("BS17_AU_02a","BS19_AU_PM08","AL19_AU_IC01","IP19_AU_CH01","AL19_AU_BS10","BS19_AU_PM02-b","AL20_AU_PM02-b")
+
+for(i in 1:length(initial_moorings)){
+  print("Data retrieval and formatting time:")
+  start = Sys.time()
+  output = format_FW(con,"BS19_AU_PM08")
+  endtime = difftime(Sys.time(),starttime,units="secs")
+  print(endtime)
+  start = Sys.time()
+  dbAppendTable(con,'detections',output)
+  endtime = difftime(Sys.time(),starttime,units="secs")
+  print("DB upload time:")
+  print(endtime)
+}
+#try loading this one up
+
 
