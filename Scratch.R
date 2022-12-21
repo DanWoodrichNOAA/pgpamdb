@@ -850,14 +850,14 @@ out = c()
 for(i in 1:nrow(missing_meta)){
 
   path= paste(root,missing_meta$name[i],sep="/")
-  
+
   if(file.exists(dir(dir(path,full.names = TRUE)[1],full.names = TRUE)[1])){
     sr = readWave(dir(dir(path,full.names = TRUE)[1],full.names = TRUE)[1],header=TRUE)$sample.rate
   }else{
     sr = NA
   }
 
-  
+
 
   out = c(out,sr)
 }
@@ -874,3 +874,4 @@ moorings_not_tracked_ds=data.frame(moorings_not_tracked)
 colnames(moorings_not_tracked_ds)= "name"
 
 dbAppendTable(con,"data_collection",moorings_not_tracked_ds)
+

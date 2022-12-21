@@ -65,33 +65,55 @@ format_FW = function(conn,mooringname){
   FNdat = FNdat[which(FNdat$FN.prob>=.91),]
   BBdat = BBdat[which(BBdat$BB.prob>=.90),]
 
-  FNcompare = paste(FNdat$Begin.Time..s.,FNdat$End.Time..s.,FNdat$combinedFileNum) %in% paste(FDreslt$Begin.Time..s.,FDreslt$End.Time..s.,FDreslt$combinedFileNum)
+  colnames(FNdat)[which(colnames(FNdat)=='FN.prob')]="probs"
+
+  if(nrow(FNdat)>0){
+
+    FNdat$CallType = "FN"
+    FNdat$label= 'pn'
+  }
+
+
+  #FNcompare = paste(round(FNdat$Begin.Time..s.,2),FNdat$combinedFileNum) %in% paste(round(FDreslt$Begin.Time..s.,2),FDreslt$combinedFileNum)
+  FNcompare= paste(FNdat$Selection,FNdat$CallType) %in% paste(FDreslt$Selection,FDreslt$CallType)
 
   if(length(FNcompare)>0){
     FNdat = FNdat[which(!FNcompare),]
   }
 
-  BBcompare = paste(BBdat$Begin.Time..s.,BBdat$End.Time..s.,BBdat$combinedFileNum) %in% paste(FDreslt$Begin.Time..s.,FDreslt$End.Time..s.,FDreslt$combinedFileNum)
+  colnames(BBdat)[which(colnames(BBdat)=='BB.prob')]="probs"
 
-  if(length(FNcompare)>0){
+  if(nrow(BBdat)>0){
+
+    BBdat$CallType = "BB"
+    BBdat$label= 'pn'
+  }
+
+  #end time noted to be unstable on at least one mooring: "AW13_AU_BS1". adding 2 decimal rounding and using probability instead of end time.
+  #unable to figure out solution to rounding issue- try just with selection as id?
+  #BBcompare = paste(round(BBdat$Begin.Time..s.,2),BBdat$combinedFileNum) %in% paste(round(FDreslt$Begin.Time..s.,2),FDreslt$combinedFileNum)
+  BBcompare = paste(BBdat$Selection,BBdat$CallType) %in% paste(BBdat$Selection,BBdat$CallType)
+
+
+  if(length(BBcompare)>0){
     BBdat = BBdat[which(!BBcompare),]
   }
 
-  colnames(FNdat)[which(colnames(FNdat)=='FN.prob')]="probs"
-  colnames(BBdat)[which(colnames(BBdat)=='BB.prob')]="probs"
-  FNdat$CallType = "FN"
-  BBdat$CallType = "BB"
 
-  FNdat$label= 'pn'
-  BBdat$label= 'pn'
+
 
   if(!is.na(FDreslt$Selection[1])){
     FDreslt$label = 'py'
-    colnames(FDreslt) = colnames(BBdat)
-    FDreslt = rbind(FDreslt,BBdat,FNdat)
+    #colnames(FDreslt) = c(colnames(FDreslt),"CallType","label")
+    if(nrow(FNdat)>0 & nrow(BBdat)>0){
+      FDreslt = rbind(FDreslt,BBdat,FNdat)
+    }else if(nrow(FNdat)>0){
+      FDreslt = rbind(FDreslt,FNdat)
+    }else if(nrow(BBdat)>0){
+      FDreslt = rbind(FDreslt,BBdat)
+    }
   }else{
     FDreslt = rbind(BBdat,FNdat)
-
   }
 
   #ok, now should have all of the data we need. How to associate file names here with ids on db? Convert to datetime, and
@@ -99,158 +121,171 @@ format_FW = function(conn,mooringname){
 
   #convert FDreslt to datetime
 
-
-
-  FDreslt$File_dt = as.POSIXct(substr(FDreslt$File,nchar(FDreslt$File)-16,nchar(FDreslt$File)-4),format="%y%m%d-%H%M%S",tz="UTC")
-
-  #get all of the soundfile ids and dts
-
-  query = gsub("[\r\n]", "",paste("SELECT soundfiles.id,duration,datetime FROM soundfiles JOIN data_collection ON data_collection.id
-                                = soundfiles.data_collection_id WHERE data_collection.name = '",newname,"'",sep=""))
-
-  sf_info = dbFetch(dbSendQuery(conn,query))
-
-  #now need to associate the ids with each detection. This corresponds to start file, need to also determine end file.
-
-  sf_info=sf_info[order(sf_info$datetime),]
-
-  sf_info$cumsum = c(0,cumsum(sf_info$duration)[1:nrow(sf_info)-1])#-sf_info$duration[1]
-
-  sf_info$id = as.integer(sf_info$id)
-
-  #order FDreslt in order of soundfile datetime, then file offest
-
-  FDreslt = FDreslt[order(FDreslt$File_dt,FDreslt$FileOffsetBegin),]
-
-  FDreslt$sf_id = sf_info[match(FDreslt$File_dt,sf_info$datetime),"id"]
-
-  FDreslt$det_dur =FDreslt$End.Time..s.-FDreslt$Begin.Time..s.
-
-  FDreslt$Begin.Time..s. = sf_info[match(FDreslt$sf_id,sf_info$id),"cumsum"]+ FDreslt$FileOffsetBegin
-
-  FDreslt$End.Time..s. = FDreslt$Begin.Time..s + FDreslt$det_dur
-
-  FDreslt$FileOffsetEnd = FDreslt$FileOffsetBegin + FDreslt$det_dur
-
-  nextfilez_start = which(FDreslt$Begin.Time..s.>sf_info[match(FDreslt$sf_id,sf_info$id)+1,"cumsum"]) #plus 1 to index is fine because we assume sf_info is in order of datetime.
-
-  FDreslt$start_file = FDreslt$sf_id
-  FDreslt$end_file = FDreslt$sf_id
-
-  if(length(nextfilez_start)>0){
-
-    FDreslt$FileOffsetBegin[nextfilez_start]= FDreslt$FileOffsetBegin[nextfilez_start]-sf_info[match(FDreslt[nextfilez_start,"sf_id"],sf_info$id),"duration"]
-    FDreslt$start_file[nextfilez_start] = sf_info[match(FDreslt[nextfilez_start,"sf_id"],sf_info$id)+1,"id"]
-
-  }
-
-  nextfilez_end = which(FDreslt$End.Time..s.>sf_info[match(FDreslt$sf_id,sf_info$id)+1,"cumsum"])
-
-  if(length(nextfilez_end)>0){
-
-    #here, %in% is ok to reassign since we can assume both FDreslt and sf_info are in consecutive order.
-    FDreslt$FileOffsetEnd[nextfilez_end]= FDreslt$FileOffsetEnd[nextfilez_end]-sf_info[match(FDreslt[nextfilez_end,"sf_id"],sf_info$id),"duration"]
-    FDreslt$end_file[nextfilez_end] = sf_info[match(FDreslt[nextfilez_end,"sf_id"],sf_info$id)+1,"id"]
-
-  }
-
-  #cool. Do we have all info we need to assemble detections data type? Let's give it a try
-
-  ct_lookup = dbFetch(dbSendQuery(conn,"SELECT id,code FROM signals WHERE code IN ('BB','FN','FW','AG')"))
-
-  ct_lookup$id = as.integer(ct_lookup$id)
-
-  lab_lookup = dbFetch(dbSendQuery(conn,"SELECT id,alias FROM label_codes WHERE alias IN ('py','pn')"))
-
-  outdata = data.frame(FDreslt$FileOffsetBegin,FDreslt$FileOffsetEnd,FDreslt$Low.Freq..Hz.,FDreslt$High.Freq..Hz.,
-                       FDreslt$start_file,FDreslt$end_file,FDreslt$probs,FDreslt$Comment,6,lab_lookup$id[match(FDreslt$label,lab_lookup$alias)],ct_lookup$id[match(FDreslt$CallType,ct_lookup$code)],2,FDreslt$File_dt)
-
   template = dbFetch(dbSendQuery(conn,"SELECT * FROM detections LIMIT 0"))
 
-  colnames(outdata)= c(colnames(template[2:13]),'datetime')
-
-  lab_lookup$upgraded = dbFetch(dbSendQuery(conn,"SELECT id FROM label_codes WHERE alias IN ('y','n')"))$id
-
-  #now- assign human labels. Loop through marktab, and assign highest detection in hour 'upgraded' label.
-
-  #first, truncate datetime to hr
-
-  outdata$datetime=format(outdata$datetime,"%y%m%d %H")
-
-  #now, loop through every
-
-  outdata$temp_id = 1:nrow(outdata)
-
-  MarkTab_reduce = MarkTab[-which(duplicated(paste(MarkTab$IDvec,MarkTab$Species.i.))),]
-
-  ag_dataset = list()
-  ag_counter = 1
-  for(i in 1:nrow(MarkTab_reduce)){
-
-    row = outdata[which((outdata$datetime %in% MarkTab[which(((MarkTab$IDvec == MarkTab_reduce$IDvec[i]) & (MarkTab$Species.i. == MarkTab_reduce$Species.i.[i]))),"V1"]) & (outdata$signal_code %in% ct_lookup$id[match(MarkTab_reduce$Species.i.[i],ct_lookup$code)])),]
-    row = row[which.max(row$probability),]
-
-    if((row$label==21 & MarkTab_reduce$MarkVec[i]=='n') | (row$label==20 & MarkTab_reduce$MarkVec[i]=='y')){
-      stop('assumption error- labels conflict between original designation and back-calculated designation')
-    }
-
-    outdata[which(outdata$temp_id==row$temp_id),"label"]=row$label-20 #assumes numeric relationship between ids... careful
-
-
-    if(MarkTab_reduce$MarkVec[i]=='a'){
-
-      #if airgun data, want to duplicate detections and append as positive for airguns under a different procedure.
-
-      #change signal code to AG and change labels to positive labels.
-      ag_data = outdata[which((outdata$datetime %in% MarkTab[which(((MarkTab$IDvec == MarkTab_reduce$IDvec[i]) & (MarkTab$Species.i. == MarkTab_reduce$Species.i.[i]))),"V1"]) & (outdata$signal_code %in% ct_lookup$id[match(MarkTab_reduce$Species.i.[i],ct_lookup$code)])),]
-
-      ag_data$signal_code=ct_lookup$id[which(ct_lookup$code=="AG")]
-      ag_data$label= ag_data$label+1 #assumes numeric relationship between ids... careful
-      ag_data$procedure=8
-
-      ag_data$comments=paste('#fp_of_:',MarkTab_reduce$Species.i.[i],sep="")
-
-      ag_dataset[[ag_counter]]=ag_data
-
-      ag_counter=ag_counter+1
-
-    }
-
-  }
-
-  #cool, now
-  #reduce a working set to just the y and py
-  #loop through each soundfile in mooring.
-  #inner loop to forge negative detections.
-
-
-
-  outdata$temp_id=NULL
-  outdata$datetime=NULL
-
   data_sources = vector('list',4) #this will be all data sources at end to combine. nulls are ok.
-  data_sources[[1]]=outdata
 
-  onlyyes = outdata[which(outdata$label %in% c(1,21)),]
+  if(nrow(FDreslt)>0){
 
-  if(length(ag_dataset)>0){
-    ag_dataset = do.call('rbind',ag_dataset)
+    FDreslt$File_dt = as.POSIXct(substr(FDreslt$File,nchar(FDreslt$File)-16,nchar(FDreslt$File)-4),format="%y%m%d-%H%M%S",tz="UTC")
 
-    ag_dataset = ag_dataset[order(ag_dataset$datetime),]
-    ag_dataset$datetime=NULL
-    ag_dataset$temp_id=NULL
+    #get all of the soundfile ids and dts
 
-    data_sources[[2]]=ag_dataset
+    query = gsub("[\r\n]", "",paste("SELECT soundfiles.id,duration,datetime FROM soundfiles JOIN data_collection ON data_collection.id
+                                  = soundfiles.data_collection_id WHERE data_collection.name = '",newname,"'",sep=""))
+
+    sf_info = dbFetch(dbSendQuery(conn,query))
+
+    #now need to associate the ids with each detection. This corresponds to start file, need to also determine end file.
+
+    sf_info=sf_info[order(sf_info$datetime),]
+
+    sf_info$cumsum = c(0,cumsum(sf_info$duration)[1:nrow(sf_info)-1])#-sf_info$duration[1]
+
+    sf_info$id = as.integer(sf_info$id)
+
+    #order FDreslt in order of soundfile datetime, then file offest
+
+    FDreslt = FDreslt[order(FDreslt$File_dt,FDreslt$FileOffsetBegin),]
+
+    FDreslt$sf_id = sf_info[match(FDreslt$File_dt,sf_info$datetime),"id"]
+
+    FDreslt$det_dur =FDreslt$End.Time..s.-FDreslt$Begin.Time..s.
+
+    FDreslt$Begin.Time..s. = sf_info[match(FDreslt$sf_id,sf_info$id),"cumsum"]+ FDreslt$FileOffsetBegin
+
+    FDreslt$End.Time..s. = FDreslt$Begin.Time..s + FDreslt$det_dur
+
+    FDreslt$FileOffsetEnd = FDreslt$FileOffsetBegin + FDreslt$det_dur
+
+    nextfilez_start = which(FDreslt$Begin.Time..s.>sf_info[match(FDreslt$sf_id,sf_info$id)+1,"cumsum"]) #plus 1 to index is fine because we assume sf_info is in order of datetime.
+
+    FDreslt$start_file = FDreslt$sf_id
+    FDreslt$end_file = FDreslt$sf_id
+
+    if(length(nextfilez_start)>0){
+
+      FDreslt$FileOffsetBegin[nextfilez_start]= FDreslt$FileOffsetBegin[nextfilez_start]-sf_info[match(FDreslt[nextfilez_start,"sf_id"],sf_info$id),"duration"]
+      FDreslt$start_file[nextfilez_start] = sf_info[match(FDreslt[nextfilez_start,"sf_id"],sf_info$id)+1,"id"]
+
+    }
+
+    nextfilez_end = which(FDreslt$End.Time..s.>sf_info[match(FDreslt$sf_id,sf_info$id)+1,"cumsum"])
+
+    if(length(nextfilez_end)>0){
+
+      #here, %in% is ok to reassign since we can assume both FDreslt and sf_info are in consecutive order.
+      FDreslt$FileOffsetEnd[nextfilez_end]= FDreslt$FileOffsetEnd[nextfilez_end]-sf_info[match(FDreslt[nextfilez_end,"sf_id"],sf_info$id),"duration"]
+      FDreslt$end_file[nextfilez_end] = sf_info[match(FDreslt[nextfilez_end,"sf_id"],sf_info$id)+1,"id"]
+
+    }
+
+    #cool. Do we have all info we need to assemble detections data type? Let's give it a try
+
+    ct_lookup = dbFetch(dbSendQuery(conn,"SELECT id,code FROM signals WHERE code IN ('BB','FN','FW','AG')"))
+
+    ct_lookup$id = as.integer(ct_lookup$id)
+
+    lab_lookup = dbFetch(dbSendQuery(conn,"SELECT id,alias FROM label_codes WHERE alias IN ('py','pn')"))
+
+    outdata = data.frame(FDreslt$FileOffsetBegin,FDreslt$FileOffsetEnd,FDreslt$Low.Freq..Hz.,FDreslt$High.Freq..Hz.,
+                         FDreslt$start_file,FDreslt$end_file,FDreslt$probs,FDreslt$Comment,6,lab_lookup$id[match(FDreslt$label,lab_lookup$alias)],ct_lookup$id[match(FDreslt$CallType,ct_lookup$code)],2,FDreslt$File_dt)
+
+    colnames(outdata)= c(colnames(template[2:13]),'datetime')
+
+    lab_lookup$upgraded = dbFetch(dbSendQuery(conn,"SELECT id FROM label_codes WHERE alias IN ('y','n')"))$id
+
+    #now- assign human labels. Loop through marktab, and assign highest detection in hour 'upgraded' label.
+
+    #first, truncate datetime to hr
+
+    outdata$datetime=format(outdata$datetime,"%y%m%d %H")
+
+    #now, loop through every
+
+    outdata$temp_id = 1:nrow(outdata)
+
+    MarkTab_reduce = MarkTab[-which(duplicated(paste(MarkTab$IDvec,MarkTab$Species.i.))),]
+
+    ag_dataset = list()
+    ag_counter = 1
+    for(i in 1:nrow(MarkTab_reduce)){
+
+      row = outdata[which((outdata$datetime %in% MarkTab[which(((MarkTab$IDvec == MarkTab_reduce$IDvec[i]) & (MarkTab$Species.i. == MarkTab_reduce$Species.i.[i]))),"V1"]) & (outdata$signal_code %in% ct_lookup$id[match(MarkTab_reduce$Species.i.[i],ct_lookup$code)])),]
+      row = row[which.max(row$probability),]
+
+      if(nrow(row)>0){
+        if((row$label==21 & MarkTab_reduce$MarkVec[i]=='n') | (row$label==20 & MarkTab_reduce$MarkVec[i]=='y')){
+          stop('assumption error- labels conflict between original designation and back-calculated designation')
+        }
+
+        outdata[which(outdata$temp_id==row$temp_id),"label"]=row$label-20 #assumes numeric relationship between ids... careful
+
+
+        if(MarkTab_reduce$MarkVec[i]=='a'){
+
+          #if airgun data, want to duplicate detections and append as positive for airguns under a different procedure.
+
+          #change signal code to AG and change labels to positive labels.
+          ag_data = outdata[which((outdata$datetime %in% MarkTab[which(((MarkTab$IDvec == MarkTab_reduce$IDvec[i]) & (MarkTab$Species.i. == MarkTab_reduce$Species.i.[i]))),"V1"]) & (outdata$signal_code %in% ct_lookup$id[match(MarkTab_reduce$Species.i.[i],ct_lookup$code)])),]
+
+          ag_data$signal_code=ct_lookup$id[which(ct_lookup$code=="AG")]
+          ag_data$label= ag_data$label+1 #assumes numeric relationship between ids... careful
+          ag_data$procedure=8
+
+          ag_data$comments=paste('#fp_of_:',MarkTab_reduce$Species.i.[i],sep="")
+
+          ag_dataset[[ag_counter]]=ag_data
+
+          ag_counter=ag_counter+1
+
+        }
+
+      }
+
+
+
+    }
+
+    #cool, now
+    #reduce a working set to just the y and py
+    #loop through each soundfile in mooring.
+    #inner loop to forge negative detections.
+
+
+
+    outdata$temp_id=NULL
+    outdata$datetime=NULL
+
+    data_sources[[1]]=outdata
+
+    onlyyes = outdata[which(outdata$label %in% c(1,21)),]
+
+    if(length(ag_dataset)>0){
+      ag_dataset = do.call('rbind',ag_dataset)
+
+      ag_dataset = ag_dataset[order(ag_dataset$datetime),]
+      ag_dataset$datetime=NULL
+      ag_dataset$temp_id=NULL
+
+
+    }
+
+    sf_no_dets = sf_info[which(!sf_info$id %in% c(onlyyes$start_file,onlyyes$end_file)),]
+
+  }else{
+
+    sf_no_dets = sf_info
+
   }
-
   #template_row = outdata[1,]
 
-  sf_no_dets = sf_info[which(!sf_info$id %in% c(onlyyes$start_file,onlyyes$end_file)),]
+
 
   if(nrow(sf_no_dets)>0){
     no_dets_frame = data.frame(0,sf_no_dets$duration,0,64,sf_no_dets$id,sf_no_dets$id,NA,"",7,20,ct_lookup$id[which(ct_lookup$code=="FW")],1)
 
-    colnames(no_dets_frame)=colnames(outdata)
+    colnames(no_dets_frame)=colnames(template[2:13])
 
     data_sources[[3]]=no_dets_frame
   }
@@ -310,11 +345,17 @@ format_FW = function(conn,mooringname){
 
     }
 
-    rows = do.call('rbind',rows)
+    if(length(rows)>0){
+      rows = do.call('rbind',rows)
 
-    colnames(rows)=colnames(outdata)
+      colnames(rows)=colnames(template[2:13])
 
-    data_sources[[4]] = rows
+      data_sources[[4]] = rows
+
+    }
+
+
+
 
   }
 
