@@ -22,7 +22,7 @@ dbuddy_pgpamdb_det_rough_convert<-function(conn,dbuddy_data,procedure,strength){
 
 }
 
-i_neg_interpolate<-function(data,FG){
+i_neg_interpolate<-function(data,FG,high_freq,procedure,signal_code,analyst){
 
   FG = FG[,which(colnames(FG) %in% c("soundfiles_id","seg_start","seg_end","datetime"))]
 
@@ -53,12 +53,63 @@ i_neg_interpolate<-function(data,FG){
     dets= data[which((data$start_file == FG$soundfiles_id[i] & data$start_file>= FG$seg_start[i]) | (data$end_file == FG$soundfiles_id[i] & data$end_file<= FG$seg_end[i]) ),]
 
     times = data.frame(c(dets$start_time,dets$end_time),c(dets$start_file,dets$end_file),c(rep("start",nrow(dets)),rep("end",nrow(dets))))
+    colnames(times)=c("time","file","meaning")
 
+    times = times[which(times$file==FG$soundfiles_id[i]),]
+
+    times$time= as.numeric(times$time)
+
+    #if the earliest time is a 'start', add an 'end' time to start of FG
+    if(nrow(times)>0){
+      if(times[which.min(times$time),"meaning"]=='start'){
+        times = rbind(c(FG$seg_start[i],as.integer(FG$soundfiles_id[i]),'end'),times)
+      }
+    }else{
+      times = rbind(c(FG$seg_start[i],as.integer(FG$soundfiles_id[i]),'end'),times)
+    }
+
+    colnames(times)=c("time","file","meaning")
+
+    if(times[which.max(times$time),"meaning"]=='end'){
+      times = rbind(c(FG$seg_end[i],as.integer(FG$soundfiles_id[i]),'start'),times)
+    }
+
+    times$time= as.numeric(times$time)
+
+    #now, go row to row in dets. every time hit a start, cap the detection. retain the earliest time through each iteration.
+
+    times = times[order(times$time),]
+
+    start_time=0
+    counter = 1
+    detsout = list()
+    for(p in 1:nrow(times)){
+
+      if(times$meaning[p]=='end'){
+        start_time = max(start_time,times$time[p]) #this will chose the latest possible start time in case of multiple ends overlapping.
+      }else{
+        detsout[[counter]]=c(start_time,times$time[p])
+        counter = counter + 1
+      }
+
+    }
+
+    detsout = do.call("rbind",detsout)
+
+    #take the above and turn into detections. assume some same fields as source data.
+
+    detsout = data.frame(as.numeric(detsout[,1]),as.numeric(detsout[,2]),0,high_freq,as.integer(FG$soundfiles_id[i]),
+                         as.integer(FG$soundfiles_id[i]),NA,"",procedure,0,signal_code,2,analyst)
+
+    new_dets[[i]] = detsout
 
   }
 
+  new_dets=do.call('rbind',new_dets)
 
+  colnames(new_dets) = c("start_time","end_time","low_freq","high_freq","start_file","end_file","probability","comments","procedure","label","signal_code","strength","analyst")
 
+  return(new_dets)
 }
 
 
@@ -102,10 +153,17 @@ dbAppendTable(con,"bins_effort",fg_tab)
 tempout = paste(getwd(),"test.csv.gz",sep="/")
 system(paste("dbuddy pull detections",tempout,"--FileGroup BS15_AU_PM02-a_files_1-104_rw_hg.csv --Analysis_ID 10 --SignalCode RW --Type i_neg --label y"))
 temp =read.csv(tempout)
+file.remove(tempout)
 
 #function to convert from dbuddy to pgpamdb
-out2 = dbuddy_pgpamdb_det_rough_convert(con,temp,procedure = 0,strength=2)
+out2 = dbuddy_pgpamdb_det_rough_convert(con,temp,procedure = 10,strength=2)
 
 #now, need a function to interpolate negatives
+out3 = i_neg_interpolate(out2,out,1024,10,"RW","DFW")
 
+#combine with positive data:
 
+out_all = rbind(out2,out3)
+
+#upload i_neg data
+dbAppendTable(con,"detections",out_all) #currently only BS15_AU_PM02-a_files_1-104_rw_hg is in!
