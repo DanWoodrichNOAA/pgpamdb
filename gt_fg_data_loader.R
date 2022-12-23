@@ -1,11 +1,11 @@
 dbuddy_pgpamdb_det_rough_convert<-function(conn,dbuddy_data,procedure,strength){
 
   #determine these values through matches
-  label_lookup= lookup_from_match(conn,'label_codes',dbuddy_data$label,'alias')
+  label_lookup= lookup_from_match(conn,'label_codes',unique(dbuddy_data$label),'alias')
   labels = label_lookup$id[match(dbuddy_data$label,label_lookup$alias)]
-  sc_lookup= lookup_from_match(conn,'signals',dbuddy_data$SignalCode,'code')
+  sc_lookup= lookup_from_match(conn,'signals',unique(dbuddy_data$SignalCode),'code')
   signal_codes = sc_lookup$id[match(dbuddy_data$SignalCode,sc_lookup$code)]
-  la_lookup = lookup_from_match(conn,'personnel',dbuddy_data$LastAnalyst,'code')
+  la_lookup = lookup_from_match(conn,'personnel',unique(dbuddy_data$LastAnalyst),'code')
   last_analyst = la_lookup$id[match(dbuddy_data$LastAnalyst,la_lookup$code)]
 
   outdata =data.frame(dbuddy_data[,c(2:8,11)],procedure,labels,signal_codes,strength,last_analyst)

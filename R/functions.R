@@ -44,7 +44,7 @@ pamdbConnect<-function(dbname,infoScript,sslKey_path,sslCert_path){
 #' @param interpret_as Ordered vector which maps dataset columns to database (including join syntax, if required) columns
 #' @return a data frame corresponding to returned columns specified in 'from_db_query' argument
 #' @export
-table_dataset_lookup<-function(conn,from_db_query,dataset,data_types,interpret_as=NULL){
+table_dataset_lookup<-function(conn,from_db_query,dataset,data_types,interpret_as=NULL,return_anything=FALSE){
 
   #SELECT * FROM answers
   #JOIN (VALUES (4509, 'B'), (622, 'C'), (1066, 'D'), (4059, 'A'), (4740, 'A'))
@@ -140,9 +140,12 @@ table_dataset_lookup<-function(conn,from_db_query,dataset,data_types,interpret_a
 
   #check that nrow is the same
 
-  if(nrow(segs)!=nrow(dataset)){
+  if(return_anything==FALSE){
+    if(nrow(segs)!=nrow(dataset)){
 
-    stop("Returned dataset not same nrow as query dataset")
+      stop("Returned dataset not same nrow as query dataset")
+
+    }
 
   }
 
