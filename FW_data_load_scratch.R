@@ -72,6 +72,7 @@ fw_done = dbFetch(dbSendQuery(con,"SELECT DISTINCT data_collection.name,data_col
                                      data_collection.id = soundfiles.data_collection_id JOIN detections ON detections.start_file = soundfiles.id"))
 
 #this isn't considering old vs new names... oops! Means I have been submitting a lot of redundant moorings.
+#fixed
 moor_to_go = moor_possible[-which(moor_possible %in% c(fw_done$name,fw_done$historic_name))]
 
 #moor_to_go_skip2 = moor_to_go[3:length(moor_to_go)]

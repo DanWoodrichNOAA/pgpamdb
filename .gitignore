@@ -10,3 +10,4 @@ NAMESPACE
 pgpamdb.Rproj
 temp/
 etc/*
+load_status.xlsx

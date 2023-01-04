@@ -50,7 +50,8 @@ i_neg_interpolate<-function(data,FG,high_freq,procedure,signal_code,analyst){
     #need to design this so it can handle detections which have start/end times relative to another file.
     #probably going to be a pain in the ass. do tomorrow.
 
-    dets= data[which((data$start_file == FG$soundfiles_id[i] & data$start_file>= FG$seg_start[i]) | (data$end_file == FG$soundfiles_id[i] & data$end_file<= FG$seg_end[i]) ),]
+    #bugged horribly. Fixed.
+    dets= data[which((data$start_file == FG$soundfiles_id[i] & data$start_time>= FG$seg_start[i]) & (data$end_file == FG$soundfiles_id[i] & data$end_time<= FG$seg_end[i]) ),]
 
     times = data.frame(c(dets$start_time,dets$end_time),c(dets$start_file,dets$end_file),c(rep("start",nrow(dets)),rep("end",nrow(dets))))
     colnames(times)=c("time","file","meaning")
@@ -58,6 +59,8 @@ i_neg_interpolate<-function(data,FG,high_freq,procedure,signal_code,analyst){
     times = times[which(times$file==FG$soundfiles_id[i]),]
 
     times$time= as.numeric(times$time)
+
+    #View(times[order(times$time),])
 
     #if the earliest time is a 'start', add an 'end' time to start of FG
     if(nrow(times)>0){
@@ -103,6 +106,12 @@ i_neg_interpolate<-function(data,FG,high_freq,procedure,signal_code,analyst){
 
     new_dets[[i]] = detsout
 
+    #print(detsout)
+
+    if(any(duplicated(detsout))){
+
+      stop()
+    }
   }
 
   new_dets=do.call('rbind',new_dets)
@@ -130,40 +139,184 @@ con=pamdbConnect("poc_v2",keyscript,clientkey,clientcert)
 
 #previously- here's how I got a FG and translated it into db form.
 
-#extract FG info from bins
-test_fg=data_pull("SELECT bins.*,soundfiles.DateTime,soundfiles.deployments_name FROM bins JOIN bins_filegroups ON bins.id = bins_filegroups.bins_id JOIN filegroups ON bins_filegroups.FG_name = filegroups.Name JOIN soundfiles ON bins.FileName= soundfiles.Name WHERE filegroups.Name = 'BS15_AU_PM02-a_files_1-104_rw_hg';")
+##extract FG info from bins
+#test_fg=data_pull("SELECT bins.*,soundfiles.DateTime,soundfiles.deployments_name FROM bins JOIN bins_filegroups ON bins.id = bins_filegroups.bins_id JOIN filegroups ON bins_filegroups.FG_name = filegroups.Name JOIN soundfiles ON bins.FileName= soundfiles.Name WHERE filegroups.Name = 'BS15_AU_PM02-a_files_1-104_rw_hg';")
 
-format_fg_query = data.frame(as.POSIXct(test_fg$DateTime,tz='utc'),test_fg$deployments_name,test_fg$SegStart,test_fg$SegStart+test_fg$SegDur)
-#so to associate to db, need to lookup by date, mooring id,
+#format_fg_query = data.frame(as.POSIXct(test_fg$DateTime,tz='utc'),test_fg$deployments_name,test_fg$SegStart,test_fg$SegStart+test_fg$SegDur)
+##so to associate to db, need to lookup by date, mooring id,
 
-colnames(format_fg_query) = c("soundfiles.datetime","data_collection.name","bins.seg_start","bins.seg_end")
-#Here is a template to do this sort of thing:
+#colnames(format_fg_query) = c("soundfiles.datetime","data_collection.name","bins.seg_start","bins.seg_end")
+##Here is a template to do this sort of thing:
 
-out = table_dataset_lookup(con,"SELECT bins.*,soundfiles.datetime,data_collection.name,a,b,c,d FROM bins JOIN soundfiles ON soundfiles.id = bins.soundfiles_id JOIN data_collection ON soundfiles.data_collection_id = data_collection.id"
-                           ,format_fg_query,c("timestamp","character varying","DOUBLE PRECISION","DOUBLE PRECISION"))
+#out = table_dataset_lookup(con,"SELECT bins.*,soundfiles.datetime,data_collection.name,a,b,c,d FROM bins JOIN soundfiles ON soundfiles.id = bins.soundfiles_id JOIN data_collection ON soundfiles.data_collection_id = data_collection.id"
+#                           ,format_fg_query,c("timestamp","character varying","DOUBLE PRECISION","DOUBLE PRECISION"))
 
-#looks like it worked. so, just associate ids
-fg_ids = as.integer(out$id)
-fg_tab = data.frame(fg_ids,1)
-colnames(fg_tab)=c("bins_id","effort_id")
-dbAppendTable(con,"bins_effort",fg_tab)
+##looks like it worked. so, just associate ids
+#fg_ids = as.integer(out$id)
+#fg_tab = data.frame(fg_ids,1)
+#colnames(fg_tab)=c("bins_id","effort_id")
+#dbAppendTable(con,"bins_effort",fg_tab)
 
-#now for this FG, try to get ids.
+##now for this FG, try to get ids.
 
-tempout = paste(getwd(),"test.csv.gz",sep="/")
-system(paste("dbuddy pull detections",tempout,"--FileGroup BS15_AU_PM02-a_files_1-104_rw_hg.csv --Analysis_ID 10 --SignalCode RW --Type i_neg --label y"))
-temp =read.csv(tempout)
-file.remove(tempout)
+#tempout = paste(getwd(),"test.csv.gz",sep="/")
+#system(paste("dbuddy pull detections",tempout,"--FileGroup BS15_AU_PM02-a_files_1-104_rw_hg.csv --Analysis_ID 10 --SignalCode RW --Type i_neg --label y"))
+#temp =read.csv(tempout)
+#file.remove(tempout)
 
-#function to convert from dbuddy to pgpamdb
-out2 = dbuddy_pgpamdb_det_rough_convert(con,temp,procedure = 10,strength=2)
+##function to convert from dbuddy to pgpamdb
+#out2 = dbuddy_pgpamdb_det_rough_convert(con,temp,procedure = 10,strength=2)
 
-#now, need a function to interpolate negatives
-out3 = i_neg_interpolate(out2,out,1024,10,"RW","DFW")
+##now, need a function to interpolate negatives
+#out3 = i_neg_interpolate(out2,out,1024,10,"RW","DFW")
 
-#combine with positive data:
+##combine with positive data:
 
-out_all = rbind(out2,out3)
+#out_all = rbind(out2,out3)
 
-#upload i_neg data
-dbAppendTable(con,"detections",out_all) #currently only BS15_AU_PM02-a_files_1-104_rw_hg is in!
+##upload i_neg data
+#dbAppendTable(con,"detections",out_all) #currently only BS15_AU_PM02-a_files_1-104_rw_hg is in!
+
+#upload the rest. pseudo:
+#put the above code in a loop (doesn't need a fxn, but might be easier).
+#pull a table of fg names. reduce to the ones I want. give that table a column indicating two letter signal code.
+#loop through row of table, pull necessary data, and upload detections within loop.
+
+#fgs-
+
+fgs_dbuddy =data_pull("SELECT name FROM filegroups;")
+fgs_dbuddy_hg = fgs_dbuddy[which(grepl("_hg",fgs_dbuddy$Name)),]
+#add the species id to id- assume and review
+fgs_dbuddy_hg2= substr(fgs_dbuddy_hg,nchar(fgs_dbuddy_hg)-4,nchar(fgs_dbuddy_hg)-3)
+
+lookup = data.frame(fgs_dbuddy_hg,fgs_dbuddy_hg2)
+#subtract the data which is already loaded:
+lookup=lookup[-which(lookup$fgs_dbuddy_hg=="BS15_AU_PM02-a_files_1-104_rw_hg"),]
+
+lookup$fgs_dbuddy_hg2=toupper(lookup$fgs_dbuddy_hg2)
+
+#now, turn above code into a loop and crank through these.
+#code copy pasted from above. not going to maintaine above if i modify, but that was used for 1st fg.
+
+
+#now that I've been through some, and need to remove fn and bb (never made it up to dbuddy)
+#, redefine lookup
+
+lookup = lookup[i:nrow(lookup),]
+
+lookup = lookup[-which(lookup$fgs_dbuddy_hg2 %in% c("FN","BB")),]
+
+for(i in 1:nrow(lookup)){
+
+  test_fg=data_pull(paste("SELECT bins.*,soundfiles.DateTime,soundfiles.deployments_name FROM bins JOIN bins_filegroups ON bins.id = bins_filegroups.bins_id JOIN filegroups ON bins_filegroups.FG_name = filegroups.Name JOIN soundfiles ON bins.FileName= soundfiles.Name WHERE filegroups.Name = '",lookup$fgs_dbuddy_hg[i],"';",sep=""))
+
+  format_fg_query = data.frame(as.POSIXct(test_fg$DateTime,tz='utc'),test_fg$deployments_name,test_fg$SegStart,test_fg$SegStart+test_fg$SegDur)
+  #so to associate to db, need to lookup by date, mooring id,
+
+  colnames(format_fg_query) = c("soundfiles.datetime","data_collection.name","bins.seg_start","bins.seg_end")
+  #Here is a template to do this sort of thing:
+
+  out = table_dataset_lookup(con,"SELECT bins.*,soundfiles.datetime,data_collection.name,a,b,c,d FROM bins JOIN soundfiles ON soundfiles.id = bins.soundfiles_id JOIN data_collection ON soundfiles.data_collection_id = data_collection.id"
+                             ,format_fg_query,c("timestamp","character varying","DOUBLE PRECISION","DOUBLE PRECISION"))
+
+  #submit effort
+
+  efforttab = data.frame(lookup$fgs_dbuddy_hg[i],"high grade semi-random","ground truth data used for detector training, negatives provided but assumed from boxes.")
+  colnames(efforttab)=c('name',"sampling_method","description")
+  dbAppendTable(con,"effort",efforttab)
+
+  #get id
+
+  newid = dbFetch(dbSendQuery(con,paste("SELECT id FROM effort WHERE name ='",lookup$fgs_dbuddy_hg[i],"'",sep="")))
+
+  #looks like it worked. so, just associate ids
+  fg_ids = as.integer(out$id)
+  fg_tab = data.frame(fg_ids,as.integer(newid$id))
+  colnames(fg_tab)=c("bins_id","effort_id")
+  dbAppendTable(con,"bins_effort",fg_tab)
+
+  #now for this FG, try to get ids.
+
+  tempout = paste(getwd(),"test.csv.gz",sep="/")
+  system(paste("dbuddy pull detections ",tempout," --FileGroup ",lookup$fgs_dbuddy_hg[i]," --Analysis_ID 10 --SignalCode ",lookup$fgs_dbuddy_hg2[i]," --Type i_neg --label y",sep=""))
+  temp =read.csv(tempout)
+  file.remove(tempout)
+
+  #function to convert from dbuddy to pgpamdb
+  out2 = dbuddy_pgpamdb_det_rough_convert(con,temp,procedure = 10,strength=2)
+
+  #now, need a function to interpolate negatives
+  out3 = i_neg_interpolate(out2,out,1024,10,lookup_from_match(con,'signals',lookup$fgs_dbuddy_hg2[i],'code')$id,lookup_from_match(con,'personnel','DFW','code')$id)
+
+  #combine with positive data:
+
+  out_all = rbind(out2,out3)
+
+  #upload i_neg data
+  dbAppendTable(con,"detections",out_all)
+
+
+}
+
+#delete mistake
+#dbFetch(dbSendQuery(con,paste("DELETE FROM bins_effort WHERE bin_id IN (",paste(fg_tab$bins_id,collapse=","),"))))
+
+#The i_neg_interpolate fxn was bugged, and replicated a lot of no's. Will have to try again to upload the detections.
+
+#dbFetch(dbSendQuery(con,"DELETE FROM detections WHERE procedure = 10 AND signal_code IN (1,2,10) AND analyst = 2"))
+
+#redo loop - also add the proper visible freq to analysis.
+
+lookup$visible_freq=1024
+lookup$visible_freq[which(lookup$fgs_dbuddy_hg2=="BN")]=2048
+
+for(i in 15:nrow(lookup)){
+
+  test_fg=data_pull(paste("SELECT bins.*,soundfiles.DateTime,soundfiles.deployments_name FROM bins JOIN bins_filegroups ON bins.id = bins_filegroups.bins_id JOIN filegroups ON bins_filegroups.FG_name = filegroups.Name JOIN soundfiles ON bins.FileName= soundfiles.Name WHERE filegroups.Name = '",lookup$fgs_dbuddy_hg[i],"';",sep=""))
+
+  format_fg_query = data.frame(as.POSIXct(test_fg$DateTime,tz='utc'),test_fg$deployments_name,test_fg$SegStart,test_fg$SegStart+test_fg$SegDur)
+  #so to associate to db, need to lookup by date, mooring id,
+
+  colnames(format_fg_query) = c("soundfiles.datetime","data_collection.name","bins.seg_start","bins.seg_end")
+  #Here is a template to do this sort of thing:
+
+  out = table_dataset_lookup(con,"SELECT bins.*,soundfiles.datetime,data_collection.name,a,b,c,d FROM bins JOIN soundfiles ON soundfiles.id = bins.soundfiles_id JOIN data_collection ON soundfiles.data_collection_id = data_collection.id"
+                             ,format_fg_query,c("timestamp","character varying","DOUBLE PRECISION","DOUBLE PRECISION"))
+
+
+  tempout = paste(getwd(),"test.csv.gz",sep="/")
+  system(paste("dbuddy pull detections ",tempout," --FileGroup ",lookup$fgs_dbuddy_hg[i]," --Analysis_ID 10 --SignalCode ",lookup$fgs_dbuddy_hg2[i]," --Type i_neg --label y",sep=""))
+  temp =read.csv(tempout)
+  file.remove(tempout)
+
+  if(any(duplicated(temp[,2:length(temp)]))){
+
+    temp = temp[-which(duplicated(temp[,2:length(temp)])),]
+
+  }
+
+  #function to convert from dbuddy to pgpamdb
+  out2 = dbuddy_pgpamdb_det_rough_convert(con,temp,procedure = 10,strength=2)
+
+  if(length(unique(out2$analyst))>1){
+    analyst_ = 2
+  }else{
+    analyst_=out2$analyst[1]
+  }
+
+  #now, need a function to interpolate negatives
+  out3 = i_neg_interpolate(out2,out,lookup$visible_freq[i],10,lookup_from_match(con,'signals',lookup$fgs_dbuddy_hg2[i],'code')$id,analyst_)
+
+  #combine with positive data:
+
+  out_all = rbind(out2,out3)
+
+  #upload i_neg data
+  dbAppendTable(con,"detections",out_all)
+
+}
+
+#DELETE FROM detections WHERE id IN (SELECT id from detections JOIN bins_detections ON bins_detections.detections.id
+#                                    = bins_detections.bins_id JOIN bins_effort ON bins_detections.bins_id = bins_effort.bins_id JOIN
+#                                    effort on bins_effort.effort_id = effort.id WHERE effort.name = 'AW13_AU_PH01_files_All_bn_hg')
+
