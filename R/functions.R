@@ -504,31 +504,75 @@ table_delete <-function(conn,tablename,ids,idname = 'id',hard_delete=FALSE){
 #' @param vector The values to compare with database table.
 #' @param match_col The name of the database column to compare the vector columns to
 #' @param idname character string specifying name of primary key.
+#' @param dep_vector values of data_collection.id, to be supplied in case you are trying to get soundfile.id from soundfile.name and believe identical names may be encountered
 #' @return lookup table of ids and the initial vector values
 #' @export
 #'
-lookup_from_match <- function(conn,tablename,vector,match_col,idname='id'){
+lookup_from_match <- function(conn,tablename,vector,match_col,idname='id',dep_vector = NULL){
+
+  #build in chunks of size which will fit
+  size_limit = 332498 #approximate, large but safe
+
 
   id_and_name = paste(idname,match_col,sep=",")
 
-  if(length(vector)>1){
-    sf_id_lookup = paste("SELECT ",id_and_name," FROM ",tablename," WHERE ",match_col," IN",paste("(",paste("$",1:(length(vector)-1),collapse=",",sep=""),",$",length(vector),")",sep=""))
-  }else{
-    sf_id_lookup = paste("SELECT ",id_and_name," FROM ",tablename," WHERE ",match_col," IN",paste("($",length(vector),")",sep=""))
+
+  dbBegin(conn)
+
+  try({
+
+
+  chunks = as.integer(ceiling(object.size(vector) / size_limit))
+
+  approx_len = ceiling(length(vector)/chunks)
+
+  chunks_out = list()
+
+  for(i in 1:chunks){
+
+    end_in = (approx_len*i)
+
+    if(end_in>length(vector)){
+      end_in= length(vector)
+    }
+
+    vector_in= vector[((approx_len*(i-1))+1):end_in]
+
+    if(length(vector_in)>1){
+      sf_id_lookup = paste("SELECT ",id_and_name," FROM ",tablename," WHERE ",match_col," IN",paste("(",paste("$",1:(length(vector_in)-1),collapse=",",sep=""),",$",length(vector_in),")",sep=""))
+    }else{
+      sf_id_lookup = paste("SELECT ",id_and_name," FROM ",tablename," WHERE ",match_col," IN",paste("($",length(vector_in),")",sep=""))
+    }
+
+    query1 <- dbSendQuery(conn, sf_id_lookup)
+    dbBind(query1, params=vector_in)
+
+    res = dbFetch(query1)
+
+    dbClearResult(query1)
+
+    res[[idname]]=as.integer(res[[idname]])
+
+    chunks_out[[i]] = res
+
   }
 
-  query1 <- dbSendQuery(conn, sf_id_lookup)
-  dbBind(query1, params=vector)
+  chunks_out = do.call("rbind",chunks_out)
 
-  #dbCommit(conn)
+  #check that the size of the lookup is the same as the size of the original vector- if it is longer, more information (dep name)
+  #will need to be provided
 
-  res = dbFetch(query1)
+  if(nrow(chunks_out)!=length(vector)){
 
-  dbClearResult(query1)
+    stop("lookup values cannot alone decipher id. Use table_dataset_lookup() if trying to match based off of multiple identifiers.")
+  }
 
-  res[[idname]]=as.integer(res[[idname]])
 
-  return(res)
+  })
+
+  dbCommit(conn)
+
+  return(chunks_out)
 
 }
 

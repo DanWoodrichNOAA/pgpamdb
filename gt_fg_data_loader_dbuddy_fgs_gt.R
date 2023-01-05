@@ -1,4 +1,5 @@
-dbuddy_pgpamdb_det_rough_convert<-function(conn,dbuddy_data,procedure,strength){
+dbuddy_pgpamdb_det_rough_convert<-function(conn,dbuddy_data,procedure,strength,depnames= NULL){
+
 
   #determine these values through matches
   label_lookup= lookup_from_match(conn,'label_codes',unique(dbuddy_data$label),'alias')
@@ -12,9 +13,27 @@ dbuddy_pgpamdb_det_rough_convert<-function(conn,dbuddy_data,procedure,strength){
 
   colnames(outdata)=c("start_time","end_time","low_freq","high_freq","start_file","end_file","probability","comments","procedure","label","signal_code","strength","analyst")
 
-  file_lookup = lookup_from_match(conn,"soundfiles",unique(c(outdata$start_file,outdata$end_file)),"name")
-  outdata$start_file = file_lookup$id[match(outdata$start_file,file_lookup$name)]
-  outdata$end_file = file_lookup$id[match(outdata$end_file,file_lookup$name)]
+  if(!is.null(depnames)){
+
+    temp = data.frame(c(outdata$start_file,outdata$end_file),c(depnames,depnames))
+
+    if(any(duplicated(temp))){
+
+      temp = temp[-which(duplicated(temp)),]
+    }
+
+    colnames(temp) = c("soundfiles.name","data_collection.name")
+
+    #lookup by table.
+    file_lookup = table_dataset_lookup(conn,"SELECT soundfiles.id,soundfiles.name,data_collection.name,a,b FROM soundfiles JOIN data_collection ON soundfiles.data_collection_id = data_collection.id"
+                                       ,temp,c("character varying","character varying"))
+
+  }else{
+    file_lookup = lookup_from_match(conn,"soundfiles",unqfiles,"name")
+  }
+    outdata$start_file = file_lookup$id[match(outdata$start_file,file_lookup$name)]
+    outdata$end_file = file_lookup$id[match(outdata$end_file,file_lookup$name)]
+
 
   outdata[which(is.na(outdata$comments)),"comments"]=""
 
@@ -141,7 +160,7 @@ source("./etc/paths.R") #populates connection paths which contain connection var
 con=pamdbConnect("poc_v2",keyscript,clientkey,clientcert)
 
 fgs_dbuddy =data_pull("SELECT name FROM filegroups;")
-fgs_dbuddy_hg = fgs_dbuddy[which(grepl("_hg",fgs_dbuddy$Name)),]
+fgs_dbuddy_hg = fgs_dbuddy[which(grepl("LMyesSample_1",fgs_dbuddy$Name)),]
 #add the species id to id- assume and review
 fgs_dbuddy_hg2= substr(fgs_dbuddy_hg,nchar(fgs_dbuddy_hg)-4,nchar(fgs_dbuddy_hg)-3)
 
@@ -193,7 +212,7 @@ for(i in 1:nrow(lookup)){
 
   #submit effort
 
-  efforttab = data.frame(lookup$fgs_dbuddy_hg[i],"high grade semi-random","ground truth data used for detector training, negatives provided but assumed from boxes.")
+  efforttab = data.frame(lookup$fgs_dbuddy_hg[i],"high grade semi-random","ground truth data used in analysis of data with detector positives from 1st gen lm analysis")
   colnames(efforttab)=c('name',"sampling_method","description")
   dbAppendTable(con,"effort",efforttab)
 
@@ -206,6 +225,7 @@ for(i in 1:nrow(lookup)){
   fg_tab = data.frame(fg_ids,as.integer(newid$id))
   colnames(fg_tab)=c("bins_id","effort_id")
   dbAppendTable(con,"bins_effort",fg_tab)
+
 
   #submit detections
   tempout = paste(getwd(),"test.csv.gz",sep="/")
@@ -231,11 +251,11 @@ for(i in 1:nrow(lookup)){
   if(nrow(temp)>0){
     vf_ = temp$VisibleHz[1]
   }else{
-    lookup$visible_freq[i]
+    vf_ = lookup$visible_freq[i]
   }
 
   #now, need a function to interpolate negatives
-  out3 = i_neg_interpolate(out2,out,lookup$visible_freq[i],10,lookup_from_match(con,'signals',lookup$fgs_dbuddy_hg2[i],'code')$id,analyst_)
+  out3 = i_neg_interpolate(out2,out,vf_,10,lookup_from_match(con,'signals',lookup$fgs_dbuddy_hg2[i],'code')$id,analyst_)
 
   #combine with positive data:
 
@@ -261,5 +281,25 @@ for(i in 1:nrow(lookup)){
 #- going to upload lm directly, so I can apply similar bin level n to fins
 #- going to upload the lm cole review sections one by one so I can
 
+#don't actually get it from here- soundfile ambiguity present
+alldfo_deploy = data_pull("SELECT * FROM detections WHERE Analysis_ID IN (1,2,3);")
+alldfo_deploy = alldfo_deploy[which(alldfo_deploy$Type=="DET"),]
 
+#get it from here (# of rows match, and looks like a more original set)
 
+alldfo_deploy2=read.csv("C:/Users/daniel.woodrich/Desktop/database/GS data upload/detections.csv")
+alldfo_deploy2 = alldfo_deploy2[which(alldfo_deploy2$Type=="DET"),]
+
+#need to fix labels (no 'strong maybe')
+
+alldfo_deploy2$label[which(alldfo_deploy2$label=="sm")] = 'm'
+
+colnames(alldfo_deploy2)[14]='data_collection.name'
+
+RW_set = alldfo_deploy2[which(alldfo_deploy2$SignalCode =="RW"),]
+GS_set = alldfo_deploy2[which(alldfo_deploy2$SignalCode =="GS"),]
+out_RW = dbuddy_pgpamdb_det_rough_convert(con,RW_set,procedure = 4,strength=2,depnames=RW_set$data_collection.name)
+out_GS = dbuddy_pgpamdb_det_rough_convert(con,GS_set,procedure = 16,strength=2,depnames=GS_set$data_collection.name)
+
+dbAppendTable(con,"detections",out_RW)
+dbAppendTable(con,"detections",out_GS)
