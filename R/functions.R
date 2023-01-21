@@ -504,15 +504,15 @@ table_delete <-function(conn,tablename,ids,idname = 'id',hard_delete=FALSE){
 #' @param vector The values to compare with database table.
 #' @param match_col The name of the database column to compare the vector columns to
 #' @param idname character string specifying name of primary key.
-#' @param dep_vector values of data_collection.id, to be supplied in case you are trying to get soundfile.id from soundfile.name and believe identical names may be encountered
 #' @return lookup table of ids and the initial vector values
 #' @export
 #'
-lookup_from_match <- function(conn,tablename,vector,match_col,idname='id',dep_vector = NULL){
+lookup_from_match <- function(conn,tablename,vector,match_col,idname='id'){
 
   #build in chunks of size which will fit
-  size_limit = 332498 #approximate, large but safe
-
+  #size_limit = 332498 #approximate, large but safe
+  #size_limit = 250000
+  size_limit = 50000
 
   id_and_name = paste(idname,match_col,sep=",")
 
@@ -559,20 +559,44 @@ lookup_from_match <- function(conn,tablename,vector,match_col,idname='id',dep_ve
 
   chunks_out = do.call("rbind",chunks_out)
 
-  #check that the size of the lookup is the same as the size of the original vector- if it is longer, more information (dep name)
-  #will need to be provided
-
-  if(nrow(chunks_out)!=length(vector)){
-
-    stop("lookup values cannot alone decipher id. Use table_dataset_lookup() if trying to match based off of multiple identifiers.")
-  }
-
-
   })
 
   dbCommit(conn)
 
+  #if(any(duplicated(chunks_out))){
+
+  #  chunks_out = chunks_out[-duplicated(chunks_out),]
+  #}
+
   return(chunks_out)
+
+}
+
+vector_validate = function(conn,table,column,vector){
+
+  #very simple fxn to determine if vector exists in column.
+
+  if(is.numeric(vector[1])){
+    spacer = ""
+  }else{
+    spacer = "'"
+  }
+
+  query = paste("SELECT ",column," FROM ",table," WHERE ",column," IN ","(",spacer,paste(vector,collapse=paste(spacer,",",spacer,sep=""),sep=""),spacer,")",sep="")
+
+  out = dbFetch(dbSendQuery(con,query))
+
+  if(length(vector[-which(vector %in% out$name)])==0){
+
+    print('All vector elements found in column')
+    out = NULL
+  }else{
+    print('Some vector elements not found')
+    out =vector[-which(vector %in% out$name)]
+
+  }
+
+  return(out)
 
 }
 
