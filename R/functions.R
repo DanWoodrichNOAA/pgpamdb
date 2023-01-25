@@ -30,6 +30,330 @@ pamdbConnect<-function(dbname,infoScript,sslKey_path,sslCert_path){
 
 }
 
+#helper fxns for db format data and process
+
+#' Update implied negatives
+#'
+#' Update the implied negatives of a filegroup-procedure-signal_code combination
+#' @param conn The database connection
+#' @param fgname The name of the filegroup.
+#' @param procedure procedure id for the filegroup-procedure-signal_code combination
+#' @param signal_code signal id for the filegroup-procedure-signal_code combination
+#' @param high_freq high frequency for implied negatives. will search the db for indications of what this should be if not provided.
+#' @return number of rows inserted corresponding to new implied negative detections.
+#' @export
+i_neg_update <- function(conn,fgname,procedure,signal_code,high_freq = NULL){
+
+  #make sure it has i_neg assumption
+
+  query = paste("SELECT * FROM effort_procedures JOIN effort ON effort_procedures.effort_id = effort.id
+  WHERE procedures_id = ",procedure," AND signal_code = ",signal_code," AND effort.name = '",fgname,"'",sep="")
+
+  query <- gsub("[\r\n]", "", query)
+
+  row = dbFetch(dbSendQuery(conn,query))
+
+  i_neg_confirm = row$effproc_assumption
+
+  if(i_neg_confirm!='i_neg'){
+    stop("cannot confirm the section of effort as i_neg assumption on select procedure and signal code. Add entry to
+         effort_procedures if assumption is correct")
+  }
+
+  #
+
+  dets = dbFetch(dbSendQuery(conn,paste("SELECT detections.* FROM detections JOIN bins_detections ON bins_detections.detections_id = detections.id JOIN bins ON bins.id = bins_detections.bins_id JOIN bins_effort ON bins.id = bins_effort.bins_id JOIN effort ON bins_effort.effort_id = effort.id WHERE effort.name = '",fgname,"' AND procedure = ",procedure," AND signal_code =",signal_code,sep="")))
+  FG = dbFetch(dbSendQuery(conn,paste("SELECT bins.*,soundfiles.datetime FROM bins JOIN bins_effort ON bins.id = bins_effort.bins_id JOIN effort ON bins_effort.effort_id = effort.id JOIN soundfiles ON bins.soundfiles_id = soundfiles.id WHERE effort.name = '",fgname,"'",sep="")))
+
+  #delete any negatives that are already in there
+  det_negs = dets[which(dets$label==0),]
+  det_negs_id = as.integer(det_negs$id)
+
+  dets = dets[which(dets$label!=0),]
+
+  if(is.null(high_freq)){
+
+    #first, see if available through lookup.
+
+    high_freq = dbFetch(dbSendQuery(conn,paste("SELECT visible_hz FROM procedures WHERE id = ",procedure,sep="")))$visible_hz
+
+    if(is.null(high_freq) | is.na(high_freq)){
+
+      #if not available through lookup, use max existing detection
+      high_freq = dbFetch(dbSendQuery(conn,paste("SELECT MAX(high_freq) FROM detections WHERE procedure = ",procedure," AND signal_code = ",signal_code,sep="")))$max
+
+      if(is.null(high_freq) | is.na(high_freq)){
+
+        stop("no way to determine high_freq from info on db. Please specify a value into function argument 'high_freq'")
+
+      }
+
+    }
+
+  }
+
+  i_neg_out = i_neg_interpolate(dets,FG,high_freq,procedure,signal_code,2)
+
+  #make modified date be most recent modified positive.
+  if(nrow(dets)>0){
+    i_neg_out$modified = max(dets$modified)
+  }else{
+    #else, make it default to now.
+    i_neg_out$modified = NULL
+  }
+
+  #compare i_neg_out to existing negatives from db. if all the important columns are the same, don't upload it. delete and reupload
+  #for any differences.
+
+  i_neg_out$start_file = as.integer(i_neg_out$start_file)
+  i_neg_out$end_file = as.integer(i_neg_out$end_file)
+
+  det_negs$id = as.integer(det_negs$id)
+  det_negs$temp_id = NA
+
+  det_negs$start_file = as.integer(det_negs$start_file)
+  det_negs$end_file = as.integer(det_negs$end_file)
+
+  i_neg_out$id = NA
+  i_neg_out$temp_id = 1:nrow(i_neg_out)
+
+  combine_negs = rbind(i_neg_out[,c("id","temp_id","start_time","end_time","low_freq","high_freq","start_file","end_file","procedure","label","signal_code")],
+                       det_negs[,c("id","temp_id","start_time","end_time","low_freq","high_freq","start_file","end_file","procedure","label","signal_code")])
+
+  combine_negs$duplicated = duplicated(combine_negs[c(3:length(combine_negs))]) | duplicated(combine_negs[c(2:length(combine_negs))],fromLast = TRUE)
+  db_to_del = combine_negs$id[-which(combine_negs$duplicated)]
+  db_to_del = db_to_del[-which(is.na(db_to_del))]
+
+  #delete on db if applicable
+  if(length(db_to_del)>0){
+
+    print("deleting existing negatives which now conflict...")
+    #don't hard delete since it will delete all dets even if procedure changed
+    table_delete(conn,'detections',db_to_del)
+
+    det_negs2 = det_negs[which(det_negs$id %in% db_to_del),]
+
+    #only delete from same procedure and signal code
+    dets_left = dbFetch(dbSendQuery(conn,paste("SELECT detections.* FROM detections WHERE original_id IN (",paste(as.integer(det_negs2$original_id),collapse=",",sep=""),") AND label = 0 AND procedure = ",procedure," AND status = 2 AND signal_code = ",signal_code,sep="")))
+
+    dets_left_id = as.integer(dets_left$id)
+    #print(dets_left_id)
+    if(length(dets_left_id)>0){
+      table_delete(conn,'detections',dets_left_id)
+    }
+  }
+
+  local_to_push = combine_negs$temp_id[-which(combine_negs$duplicated)]
+  local_to_push = local_to_push[-which(is.na(local_to_push))]
+
+  if(length(local_to_push)>0){
+
+    i_neg_out = i_neg_out[which(i_neg_out$temp_id %in% local_to_push),]
+
+    print(paste("submitting i_neg data for effort name:",fgname,", procedure:",procedure,"and signal_code:",signal_code))
+
+    out = dbAppendTable(conn,"detections",i_neg_out)
+
+    print("data submitted!")
+
+  }else{
+
+    print("no changes detected in positive data, leaving unchanged.")
+  }
+
+  return(out)
+
+}
+
+#' Create assumed detections for implied negative data
+#'
+#' Create assumed detections from ground truth detections.
+#' @param data The dataset. Uses start and end time and start and end file. column names need to be in db format. must correspond with fg.
+#' @param FG The filegroup, in db format (bins.soundfiles_id, bins.seg_start,bins.seg_end, soundfiles.datetime)
+#' @param high_freq high frequency of the implied negative detection.
+#' @param procedure procedure id for the implied negative detections
+#' @param signal_code signal id for the implied negative detections
+#' @param analyst analyst id for the implied negative detections
+#' @return dataframe in db format of implied negative detections
+#' @export
+i_neg_interpolate<-function(data,FG,high_freq,procedure,signal_code,analyst){
+
+  FG = FG[,which(colnames(FG) %in% c("soundfiles_id","seg_start","seg_end","datetime"))]
+
+  FG = FG[order(FG$datetime),]
+
+  FG$delete = 0
+
+  #combine rows on condition
+  for(i in 2:nrow(FG)){
+    if(FG[i-1,"soundfiles_id"]==FG[i,"soundfiles_id"] & FG[i-1,"seg_end"]==FG[i,"seg_start"]){
+      FG[i-1,"delete"]=1
+      FG[i,"seg_start"]=FG[i-1,"seg_start"]
+    }
+  }
+
+  FG = FG[which(FG$delete==0),]
+
+  #FG now represents largest consectutive section not overlapping soundfiles.
+
+  #make FG
+
+  #for each bin loop extract dets from fg and then determine which detections to add
+  new_dets = list()
+  for(i in 1:nrow(FG)){
+
+    dets= data[which((data$start_file == FG$soundfiles_id[i] & (data$start_time>= FG$seg_start[i] & data$start_time < FG$seg_end[i]))
+                     | (data$end_file == FG$soundfiles_id[i] & (data$end_time<= FG$seg_end[i] & data$end_time > FG$seg_start[i]) )),]
+
+    times = data.frame(c(dets$start_time,dets$end_time),c(dets$start_file,dets$end_file),c(rep("start",nrow(dets)),rep("end",nrow(dets))))
+    colnames(times)=c("time","file","meaning")
+
+    times = times[which(times$file==FG$soundfiles_id[i]),]
+
+    times$time= as.numeric(times$time)
+
+    #View(times[order(times$time),])
+
+    #if the earliest time is a 'start', add an 'end' time to start of FG
+    if(nrow(times)>0){
+      if(times[which.min(times$time),"meaning"]=='start'){
+        times = rbind(c(FG$seg_start[i],as.integer(FG$soundfiles_id[i]),'end'),times)
+      }
+    }else{
+      times = rbind(c(FG$seg_start[i],as.integer(FG$soundfiles_id[i]),'end'),times)
+    }
+
+    colnames(times)=c("time","file","meaning")
+
+    if(times[which.max(times$time),"meaning"]=='end'){
+      times = rbind(c(FG$seg_end[i],as.integer(FG$soundfiles_id[i]),'start'),times)
+    }
+
+    times$time= as.numeric(times$time)
+
+    #now, go row to row in dets. every time hit a start, cap the detection. retain the earliest time through each iteration.
+
+    times = times[order(times$time),]
+
+    start_time=0
+    counter = 1
+    detsout = list()
+
+    #deal with overlapping dets- if there are consecutive starts/ends, take the min of start and the max of end
+
+    if(nrow(times)>1){
+      del = c()
+      for(p in 2:nrow(times))
+        if(times[p-1,"meaning"]==times[p,"meaning"]){
+          if(times[p,"meaning"] == "start"){
+            del = c(del,p)
+          }else{
+            del = c(del,p-1)
+          }
+
+        }
+    }
+
+    if(length(del)>0){
+      times = times[-del,]
+    }
+
+
+    for(p in 1:nrow(times)){
+
+      if(times$meaning[p]=='end'){
+        start_time = max(start_time,times$time[p]) #this will chose the latest possible start time in case of multiple ends overlapping.
+      }else{
+        detsout[[counter]]=c(start_time,times$time[p])
+        counter = counter + 1
+      }
+
+    }
+
+    detsout = do.call("rbind",detsout)
+
+    #if(as.integer(FG$soundfiles_id[i])==4171013){
+    #  print(dets)
+    #  print(detsout)
+    #}
+
+
+    #take the above and turn into detections. assume some same fields as source data.
+
+    detsout = data.frame(as.numeric(detsout[,1]),as.numeric(detsout[,2]),0,high_freq,as.integer(FG$soundfiles_id[i]),
+                         as.integer(FG$soundfiles_id[i]),NA,"",procedure,0,signal_code,2,analyst)
+
+    new_dets[[i]] = detsout
+
+    #print(detsout)
+
+    if(any(duplicated(detsout))){
+
+      stop()
+    }
+  }
+
+  new_dets=do.call('rbind',new_dets)
+
+  colnames(new_dets) = c("start_time","end_time","low_freq","high_freq","start_file","end_file","probability","comments","procedure","label","signal_code","strength","analyst")
+
+  return(new_dets)
+}
+
+#' convert a dataset from detx format to db format
+#'
+#' convert a dataset from detx format to db format. Could use work to be a little more general in cases where detx has variable fields.
+#' @param conn The database connection
+#' @param detx_data The dataset in detx format
+#' @param procedure procedure id for the output detections (no equivalent in detx)
+#' @param strength strength_codes id for the output detections (no equivalent in detx)
+#' @param depnames additional column to provide in case of file name abiguity. Must match to values in data_collection 'name' column.
+#' @return a db format data frame
+#' @export
+detx_pgpamdb_det_rough_convert<-function(conn,detx_data,procedure,strength,depnames= NULL){
+
+
+  #determine these values through matches
+  label_lookup= lookup_from_match(conn,'label_codes',unique(detx_data$label),'alias')
+  labels = label_lookup$id[match(detx_data$label,label_lookup$alias)]
+  sc_lookup= lookup_from_match(conn,'signals',unique(detx_data$SignalCode),'code')
+  signal_codes = sc_lookup$id[match(detx_data$SignalCode,sc_lookup$code)]
+  la_lookup = lookup_from_match(conn,'personnel',unique(detx_data$LastAnalyst),'code')
+  last_analyst = la_lookup$id[match(detx_data$LastAnalyst,la_lookup$code)]
+
+  startind = which(colnames(detx_data)=='StartTime')
+
+  outdata =data.frame(detx_data[,c((startind):(5+startind),which(colnames(detx_data)=='probs'),max(which(colnames(detx_data)=='comments'),which(colnames(detx_data)=='Comments')))],procedure,labels,signal_codes,strength,last_analyst)
+
+  colnames(outdata)=c("start_time","end_time","low_freq","high_freq","start_file","end_file","probability","comments","procedure","label","signal_code","strength","analyst")
+
+  if(!is.null(depnames)){
+
+    temp = data.frame(c(outdata$start_file,outdata$end_file),c(depnames,depnames))
+
+    if(any(duplicated(temp))){
+
+      temp = temp[-which(duplicated(temp)),]
+    }
+
+    colnames(temp) = c("soundfiles.name","data_collection.name")
+
+    #lookup by table.
+    file_lookup = table_dataset_lookup(conn,"SELECT soundfiles.id,soundfiles.name,data_collection.name,a,b FROM soundfiles JOIN data_collection ON soundfiles.data_collection_id = data_collection.id"
+                                       ,temp,c("character varying","character varying"))
+
+  }else{
+    file_lookup = lookup_from_match(conn,"soundfiles",unique(c(outdata$start_file,outdata$end_file)),"name")
+  }
+  outdata$start_file = file_lookup$id[match(outdata$start_file,file_lookup$name)]
+  outdata$end_file = file_lookup$id[match(outdata$end_file,file_lookup$name)]
+
+
+  outdata[which(is.na(outdata$comments)),"comments"]=""
+
+  return(outdata)
+
+}
 
 #DML and SQL operations.
 

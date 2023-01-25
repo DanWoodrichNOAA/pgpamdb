@@ -1,48 +1,6 @@
-detx_pgpamdb_det_rough_convert<-function(conn,detx_data,procedure,strength,depnames= NULL){
 
 
-  #determine these values through matches
-  label_lookup= lookup_from_match(conn,'label_codes',unique(detx_data$label),'alias')
-  labels = label_lookup$id[match(detx_data$label,label_lookup$alias)]
-  sc_lookup= lookup_from_match(conn,'signals',unique(detx_data$SignalCode),'code')
-  signal_codes = sc_lookup$id[match(detx_data$SignalCode,sc_lookup$code)]
-  la_lookup = lookup_from_match(conn,'personnel',unique(detx_data$LastAnalyst),'code')
-  last_analyst = la_lookup$id[match(detx_data$LastAnalyst,la_lookup$code)]
-
-  startind = which(colnames(detx_data)=='StartTime')
-
-  outdata =data.frame(detx_data[,c((startind):(5+startind),which(colnames(detx_data)=='probs'),max(which(colnames(detx_data)=='comments'),which(colnames(detx_data)=='Comments')))],procedure,labels,signal_codes,strength,last_analyst)
-
-  colnames(outdata)=c("start_time","end_time","low_freq","high_freq","start_file","end_file","probability","comments","procedure","label","signal_code","strength","analyst")
-
-  if(!is.null(depnames)){
-
-    temp = data.frame(c(outdata$start_file,outdata$end_file),c(depnames,depnames))
-
-    if(any(duplicated(temp))){
-
-      temp = temp[-which(duplicated(temp)),]
-    }
-
-    colnames(temp) = c("soundfiles.name","data_collection.name")
-
-    #lookup by table.
-    file_lookup = table_dataset_lookup(conn,"SELECT soundfiles.id,soundfiles.name,data_collection.name,a,b FROM soundfiles JOIN data_collection ON soundfiles.data_collection_id = data_collection.id"
-                                       ,temp,c("character varying","character varying"))
-
-  }else{
-    file_lookup = lookup_from_match(conn,"soundfiles",unique(c(outdata$start_file,outdata$end_file)),"name")
-  }
-    outdata$start_file = file_lookup$id[match(outdata$start_file,file_lookup$name)]
-    outdata$end_file = file_lookup$id[match(outdata$end_file,file_lookup$name)]
-
-
-  outdata[which(is.na(outdata$comments)),"comments"]=""
-
-  return(outdata)
-
-}
-
+#don't move this- most useful for old conversion..?
 fg_breakbins <-function(data,interval){
 
   out_bins = list()
@@ -85,7 +43,7 @@ fg_breakbins <-function(data,interval){
 
 }
 
-#assumes detx input
+#don't submit, trivial to submit data when originates with a query.
 submit_fg<-function(con,fgdata,name,sampling_method,description,insert_nonmatching = FALSE){
 
   #if datetime isn't provided, add from filename
@@ -157,6 +115,7 @@ submit_fg<-function(con,fgdata,name,sampling_method,description,insert_nonmatchi
 
 }
 
+#don't submit- needs a rewrite to db standard.
 bin_negatives<-function(data,FG,bintype,analyst){
 
   out_negs = vector("list",2)
@@ -241,106 +200,6 @@ bin_negatives<-function(data,FG,bintype,analyst){
 
 
 }
-
-i_neg_interpolate<-function(data,FG,high_freq,procedure,signal_code,analyst){
-
-  FG = FG[,which(colnames(FG) %in% c("soundfiles_id","seg_start","seg_end","datetime"))]
-
-  FG = FG[order(FG$datetime),]
-
-  FG$delete = 0
-
-  #combine rows on condition
-  for(i in 2:nrow(FG)){
-    if(FG[i-1,"soundfiles_id"]==FG[i,"soundfiles_id"] & FG[i-1,"seg_end"]==FG[i,"seg_start"]){
-      FG[i-1,"delete"]=1
-      FG[i,"seg_start"]=FG[i-1,"seg_start"]
-    }
-  }
-
-  FG = FG[which(FG$delete==0),]
-
-  #FG now represents largest consectutive section not overlapping soundfiles.
-
-  #make FG
-
-  #for each bin loop extract dets from fg and then determine which detections to add
-  new_dets = list()
-  for(i in 1:nrow(FG)){
-    #need to design this so it can handle detections which have start/end times relative to another file.
-    #probably going to be a pain in the ass. do tomorrow.
-
-    #bugged horribly. Fixed.
-    dets= data[which((data$start_file == FG$soundfiles_id[i] & data$start_time>= FG$seg_start[i]) & (data$end_file == FG$soundfiles_id[i] & data$end_time<= FG$seg_end[i]) ),]
-
-    times = data.frame(c(dets$start_time,dets$end_time),c(dets$start_file,dets$end_file),c(rep("start",nrow(dets)),rep("end",nrow(dets))))
-    colnames(times)=c("time","file","meaning")
-
-    times = times[which(times$file==FG$soundfiles_id[i]),]
-
-    times$time= as.numeric(times$time)
-
-    #View(times[order(times$time),])
-
-    #if the earliest time is a 'start', add an 'end' time to start of FG
-    if(nrow(times)>0){
-      if(times[which.min(times$time),"meaning"]=='start'){
-        times = rbind(c(FG$seg_start[i],as.integer(FG$soundfiles_id[i]),'end'),times)
-      }
-    }else{
-      times = rbind(c(FG$seg_start[i],as.integer(FG$soundfiles_id[i]),'end'),times)
-    }
-
-    colnames(times)=c("time","file","meaning")
-
-    if(times[which.max(times$time),"meaning"]=='end'){
-      times = rbind(c(FG$seg_end[i],as.integer(FG$soundfiles_id[i]),'start'),times)
-    }
-
-    times$time= as.numeric(times$time)
-
-    #now, go row to row in dets. every time hit a start, cap the detection. retain the earliest time through each iteration.
-
-    times = times[order(times$time),]
-
-    start_time=0
-    counter = 1
-    detsout = list()
-    for(p in 1:nrow(times)){
-
-      if(times$meaning[p]=='end'){
-        start_time = max(start_time,times$time[p]) #this will chose the latest possible start time in case of multiple ends overlapping.
-      }else{
-        detsout[[counter]]=c(start_time,times$time[p])
-        counter = counter + 1
-      }
-
-    }
-
-    detsout = do.call("rbind",detsout)
-
-    #take the above and turn into detections. assume some same fields as source data.
-
-    detsout = data.frame(as.numeric(detsout[,1]),as.numeric(detsout[,2]),0,high_freq,as.integer(FG$soundfiles_id[i]),
-                         as.integer(FG$soundfiles_id[i]),NA,"",procedure,0,signal_code,2,analyst)
-
-    new_dets[[i]] = detsout
-
-    #print(detsout)
-
-    if(any(duplicated(detsout))){
-
-      stop()
-    }
-  }
-
-  new_dets=do.call('rbind',new_dets)
-
-  colnames(new_dets) = c("start_time","end_time","low_freq","high_freq","start_file","end_file","probability","comments","procedure","label","signal_code","strength","analyst")
-
-  return(new_dets)
-}
-
 
 #GT and FG data loader.
 
@@ -1186,3 +1045,317 @@ colnames(input)=colnames(template)[2:(length(input)+1)]
 dbAppendTable(con,'detections',input)
 
 #cool, it's fixed!
+
+#need to do a round of corrections- some dets identified where end time was greater than end file.
+#bring in those which start time > start file dur.
+
+query = "SELECT * FROM detections JOIN soundfiles ON detections.start_file = soundfiles.id WHERE detections.start_time > soundfiles.duration"
+
+detss = dbFetch(dbSendQuery(con,query))
+
+#need to calculate real time start of files.
+
+detss$datetime
+detss$det_datetime = detss$datetime + detss$start_time
+
+#now the tricky part- find what should be the correct soundfile for each. Could just loop it... :)
+
+min_sfs = c()
+min_sfs_lens=c()
+max_sfs = c()
+
+for(i in 1:nrow(detss)){
+
+  var1 = as.integer(dbFetch(dbSendQuery(con,paste("SELECT soundfiles.id FROM soundfiles WHERE soundfiles.datetime = (SELECT MIN(datetime) FROM soundfiles WHERE soundfiles.datetime > '",as.character(detss$datetime[i]),"' AND soundfiles.data_collection_id = ",as.integer(detss$data_collection_id[i]),") AND soundfiles.data_collection_id = ",as.integer(detss$data_collection_id[i]),sep="")))$id)
+
+  var2 = as.integer(dbFetch(dbSendQuery(con,paste("SELECT soundfiles.id FROM soundfiles WHERE soundfiles.datetime = (SELECT MAX(datetime) FROM soundfiles WHERE soundfiles.datetime < '",as.character(detss$det_datetime[i]),"' AND soundfiles.data_collection_id = ",as.integer(detss$data_collection_id[i]),") AND soundfiles.data_collection_id = ",as.integer(detss$data_collection_id[i]),sep="")))$id)
+
+  if(length(var1)==0){
+
+    var1 = NA
+  }
+
+  if(length(var2)==0){
+    var2= NA
+  }
+
+  min_sfs = c(min_sfs,var1)
+  min_sfs_lens = c(min_sfs_lens,length(var1))
+
+  max_sfs = c(max_sfs,var2)
+
+  print(i)
+  print(length(min_sfs[i]))
+  print(length(min_sfs[i]))
+
+  if(length(var1)>1){
+    stop()
+  }
+
+}
+
+detss$min_sfs = min_sfs
+detss$max_sfs = max_sfs
+
+#cool. now, make a lookup table.
+
+lookup = lookup_from_match(con,"soundfiles",unique(c(detss$max_sfs,detss$min_sfs)[-which(is.na(c(detss$max_sfs,detss$min_sfs)))]),)
+
+df = data.frame(unique(c(detss$max_sfs,detss$min_sfs)[-which(is.na(c(detss$max_sfs,detss$min_sfs)))]))
+colnames(df)="id"
+
+soundfiles = table_dataset_lookup(con,"SELECT * FROM soundfiles",df,"integer")
+
+#the bad gt data look too messed up to be fixed in this manner.
+
+#delete existing data off of db.
+
+#dbFetch(dbSendQuery(con,"DELETE FROM detections WHERE procedure = 10 AND signal_code = 6 AND strength = 2 AND label = 1"))
+
+#dbAppendTable('detections',)
+
+#first, correct the fgs.
+#the suspected incorrect fgs are:
+#AW12_AU_CL01_files_441-516_bb_hg (done)
+#BS12_AU_PM08_files_8101-8176_bb_hg (not actually missing any fg. same deal as below)
+#AW15_AU_NM01_files_70-145_bb_hg (not actually missing any fg. The story here is that the boxes continue on while the effort stops.
+#solutions are to either extend the gt using some of the next files from the original fn context, or just discard the labels)
+#NOPP6_EST_20090403_files_All.csv (same deal!)
+
+fgname = "NOPP6_EST_20090403_files_All"
+sfiles_path ="//akc0ss-n086/NMML_CAEP_Acoustics/Detector/Combined_sound_files/RW/No_whiten_decimate_by_16/NOPP6_EST_20090403_files_All_SFiles_and_durations.csv"
+
+fg_fix = dbFetch(dbSendQuery(con,paste("SELECT bins.*,soundfiles.name,soundfiles.duration FROM soundfiles JOIN bins ON bins.soundfiles_id = soundfiles.id JOIN bins_effort ON bins.id = bins_effort.bins_id JOIN effort ON effort.id = bins_effort.effort_id WHERE effort.name = '",fgname,"'",sep="")))
+fg_fix_og = read.csv(sfiles_path)
+
+fg_fix_og$bins.seg_start = as.numeric(substr(fg_fix_og$SFsh,nchar(fg_fix_og$SFsh)-6,nchar(fg_fix_og$SFsh)-4))/100*60*3
+fg_fix_og$soundfiles.name = paste(substr(fg_fix_og$SFsh,1,nchar(fg_fix_og$SFsh)-19),
+                                 substr(fg_fix_og$SFsh,nchar(fg_fix_og$SFsh)-16,nchar(fg_fix_og$SFsh)-7),"000.wav",sep="")
+
+fg_fix_og$soundfiles.name = gsub("BS08a_","BSPM08-",fg_fix_og$soundfiles.name)
+
+fg_fix_og$soundfiles.data_collection_id = 323
+fg_fix_og$bins.type = 1
+
+fg_fix_og_search = fg_fix_og[c("bins.seg_start","soundfiles.name","soundfiles.data_collection_id","bins.type")]
+
+fg_fix_og_search$soundfiles.name = gsub("_","-",fg_fix_og_search$soundfiles.name)
+
+fg_fix_og_lookup = table_dataset_lookup(con,"SELECT bins.*,soundfiles.name,soundfiles.duration,a,b,c,d FROM soundfiles JOIN bins ON bins.soundfiles_id = soundfiles.id",
+                                       fg_fix_og_search,c("DOUBLE PRECISION","character varying","integer","integer"),return_anything = TRUE)
+
+fg_fix_og_lookup$id = as.integer(fg_fix_og_lookup$id)
+
+missing_bins = fg_fix_og_lookup$id[-which(fg_fix_og_lookup$id %in% as.integer(fg_fix$id))]
+
+#get effort id
+
+eff_id = dbFetch(dbSendQuery(con,paste("SELECT id FROM effort WHERE name = '",fgname,"'",sep="")))
+newtab = data.frame(missing_bins,as.integer(eff_id$id))
+colnames(newtab) = c("bins_id","effort_id")
+
+dbAppendTable(con,'bins_effort',newtab)
+
+#So, what to do next ?
+#upload the old gt for AW12_AU_CL01_files_441-516_bb_hg and RW09_EA_01_files_1-75.txt (done!)
+#upload the standard gt for the rest.
+#delete those after which violate assumptions.
+#done!
+
+bb_path = "C:/Users/daniel.woodrich/Desktop/database/GroundTruth/BB/"
+
+allbbs = dir(bb_path,full.names = TRUE)
+
+#only upload those not already uploaded
+allbbs = allbbs[2:7]
+
+bb_all = list()
+
+for(i in 1:length(allbbs)){
+
+  bb_all[[i]] = read.csv(allbbs[i])
+
+}
+
+bb_all = do.call("rbind",bb_all)
+
+bb_all$probs = NA
+bb_all$comments = ""
+bb_all$LastAnalyst = "DFW"
+
+bb_all_db = detx_pgpamdb_det_rough_convert(con,bb_all,10,2)
+
+dbAppendTable(con,'detections',bb_all_db)
+
+bb_path = "//akc0ss-n086/NMML_CAEP_Acoustics/Detector/RavenBLEDscripts/Data/Selection tables/BB/RW09_EA_01Sum/RW09_EA_01_files_1-75.txt"
+bb_fgname = "RW09_EA_UM01_files_1-75_bb_hg"
+
+upload_from_oldold <- function(conn,path,fgname){
+
+  #load in raven file from path.
+
+  fg= dbFetch(dbSendQuery(con,paste("SELECT bins.*,soundfiles.name,soundfiles.duration FROM soundfiles JOIN bins ON bins.soundfiles_id = soundfiles.id JOIN bins_effort ON bins.id = bins_effort.bins_id JOIN effort ON effort.id = bins_effort.effort_id WHERE effort.name = '",fgname,"'",sep="")))
+
+  rav_og_data = read.delim(bb_path)
+
+  #put fg in cons order
+
+  fg = fg[order(fg$name,fg$seg_start),]
+
+  fg$cons = c(0,cumsum(fg$seg_end-fg$seg_start)[1:length(cumsum(fg$seg_end-fg$seg_start))-1])
+
+  rav_og_data$dur = rav_og_data$End.Time..s.-rav_og_data$Begin.Time..s.
+
+  rav_og_data$start_file = fg$soundfiles_id[findInterval(rav_og_data$Begin.Time..s.,fg$cons)]
+  rav_og_data$end_file = fg$soundfiles_id[findInterval(rav_og_data$End.Time..s.,fg$cons)]
+
+  #no dets overlap files for this one.. all(rav_og_data$start_file==rav_og_data$end_file)
+
+  file_uniques = fg[which(fg$seg_start==0),]
+  file_uniques$cons = c(0,cumsum(file_uniques$duration)[1:nrow(file_uniques)-1])
+
+  rav_og_data$offset =rav_og_data$Begin.Time..s. - file_uniques$cons[findInterval(rav_og_data$Begin.Time..s.,file_uniques$cons)]
+
+  #think I have everything we need. load it in as dets.
+
+  template = dbFetch(dbSendQuery(con,'SELECT * FROM detections LIMIT 1'))
+
+  input = data.frame(rav_og_data$offset,rav_og_data$offset+rav_og_data$dur,rav_og_data$Low.Freq..Hz.,rav_og_data$High.Freq..Hz.,
+                     rav_og_data$start_file,rav_og_data$end_file,NA,"",10,1,6,2)
+
+  colnames(input)=colnames(template)[2:(length(input)+1)]
+
+  dbAppendTable(con,'detections',input)
+
+}
+
+
+
+#try to recalculate i_neg. Use NOPP6_EST_20090328_files_All as a test.
+
+dets = dbFetch(dbSendQuery(con,"SELECT * FROM detections JOIN bins_detections ON bins_detections.detections_id = detections.id JOIN bins ON bins.id = bins_detections.bins_id JOIN bins_effort ON bins.id = bins_effort.bins_id JOIN effort ON bins_effort.effort_id = effort.id WHERE effort.name = 'NOPP6_EST_20090328_files_All'"))
+FG = dbFetch(dbSendQuery(con,"SELECT bins.*,soundfiles.datetime FROM bins JOIN bins_effort ON bins.id = bins_effort.bins_id JOIN effort ON bins_effort.effort_id = effort.id JOIN soundfiles ON bins.soundfiles_id = soundfiles.id WHERE effort.name = 'NOPP6_EST_20090328_files_All'"))
+
+test = i_neg_interpolate(dets,FG,512,10,1,2)
+test$comments = "test i_neg algorithm: testing data"
+
+dbAppendTable(con,"detections",test)
+
+dets_to_del = dbFetch(dbSendQuery(con,"SELECT id FROM detections WHERE comments = 'test i_neg algorithm: testing data'"))
+dets_to_del = as.integer(dets_to_del$id)
+table_delete(con,"detections",dets_to_del,hard_delete = TRUE)
+
+#cool, looks good! Now, add these all back to db with a big loop. Can make functions to update one, and then all as needed.
+
+fgname = "NOPP6_EST_20090328_files_All"
+procedure = 10
+signal_code = 1
+
+i_neg_update(con,"NOPP6_EST_20090328_files_All",10,1,512)
+
+#find all of the i_neg effort names which need to be updated.
+
+i_neg_tab = dbFetch(dbSendQuery(con,"SELECT effort_procedures.*,effort.name FROM effort JOIN effort_procedures ON effort_procedures.effort_id = effort.id WHERE effort_procedures.effproc_assumption = 'i_neg'"))
+
+#i_neg_tab = i_neg_tab[which(i_neg_tab$name!="NOPP6_EST_20090328_files_All"),]
+
+#before doing loop below, find n's from i_neg procedures with comments, and change the procedure to protect them from deletion.
+
+i_neg_0s = dbFetch(dbSendQuery(con,"SELECT * FROM detections WHERE procedure IN (10,11,12,13,17) AND label = 0"))
+
+i_neg_0s = i_neg_0s[which(i_neg_0s$procedure!=10 & i_neg_0s$signal_code!=1),]
+
+i_neg_0s$procedure = 0
+
+i_neg_0s$comments = paste(i_neg_0s$comments,"#changed procedure by dfw to avoid deletion of 0 label data in i_neg effort.")
+
+i_neg_0s$modified=NULL
+i_neg_0s$analyst = NULL
+i_neg_0s$status = NULL
+
+table_update(con,'detections',i_neg_0s[,c("id","procedure","comments")])
+
+#loop through this and add i_neg!
+
+for(i in 45:nrow(i_neg_tab)){
+
+  i_neg_update(con,i_neg_tab$name[i],as.integer(i_neg_tab$procedures_id[i]),as.integer(i_neg_tab$signal_code[i]))
+#function(conn,fgname,procedure,signal_code,high_freq = NULL)
+}
+
+
+#add Jess's "g2" analysis to database.
+
+#retrieved from email copy
+jess_g2 = read.csv("C:/Users/daniel.woodrich/Downloads/AM-XBCS01_INSTINCT_review_final.csv")
+
+jess_g2 = jess_g2[which(jess_g2$View=="Spectrogram 1"),]
+#convert to db format
+#jess_g2_db = detx_pgpamdb_det_rough_convert(con,jess_g2,19,2)
+
+#would prefer not to do in this way since it's in raven format.
+#check dbuddy
+
+#anaylses_old = data_pull("SELECT * FROM analyses;")
+
+#unfortunately, doesn't look like it was ever loaded in. so , probably convert from raven.
+#also, can't retrieve it from running instinct params, probably too old at this point to be backwards compatible.
+#so, do it old fashioned way. adapt above fxn.
+
+fg= dbFetch(dbSendQuery(con,paste("SELECT bins.*,soundfiles.name,soundfiles.duration FROM soundfiles JOIN bins ON bins.soundfiles_id = soundfiles.id WHERE soundfiles.data_collection_id = 320 AND bins.type = 2",sep="")))
+
+rav_og_data = jess_g2
+
+rav_og_data$signal_code = 0
+rav_og_data$signal_code[which(rav_og_data$label=='s')]=20
+rav_og_data$signal_code[which(rav_og_data$label!='s')]=2
+
+rav_og_data$procedure= 0
+rav_og_data$procedure[which(rav_og_data$label=='s')]=20
+rav_og_data$procedure[which(rav_og_data$label!='s')]=19
+
+#copy this section, and make it also represent gs no's
+
+rav_og_data_sp_copy = rav_og_data[which(rav_og_data$label=='s'),]
+
+rav_og_data_sp_copy$label = 0
+rav_og_data_sp_copy$procedure = 19
+rav_og_data_sp_copy$signal_code = 2
+
+rav_og_data$label[which(rav_og_data$label=='s')]='y'
+
+label_lookup= lookup_from_match(con,'label_codes',unique(rav_og_data$label),'alias')
+rav_og_data$label = label_lookup$id[match(rav_og_data$label,label_lookup$alias)]
+
+rav_og_data = rbind(rav_og_data,rav_og_data_sp_copy)
+
+#put fg in cons order
+
+fg = fg[order(fg$name,fg$seg_start),]
+
+fg$cons = c(0,cumsum(fg$seg_end-fg$seg_start)[1:length(cumsum(fg$seg_end-fg$seg_start))-1])
+
+rav_og_data$dur = rav_og_data$End.Time..s.-rav_og_data$Begin.Time..s.
+
+rav_og_data$start_file = fg$soundfiles_id[findInterval(rav_og_data$Begin.Time..s.,fg$cons)]
+rav_og_data$end_file = fg$soundfiles_id[findInterval(rav_og_data$End.Time..s.,fg$cons)]
+
+#no dets overlap files for this one.. all(rav_og_data$start_file==rav_og_data$end_file)
+
+file_uniques = fg[which(fg$seg_start==0),]
+file_uniques$cons = c(0,cumsum(file_uniques$duration)[1:nrow(file_uniques)-1])
+
+rav_og_data$offset =rav_og_data$Begin.Time..s. - file_uniques$cons[findInterval(rav_og_data$Begin.Time..s.,file_uniques$cons)]
+
+#think I have everything we need. load it in as dets.
+
+template = dbFetch(dbSendQuery(con,'SELECT * FROM detections LIMIT 1'))
+
+input = data.frame(rav_og_data$offset,rav_og_data$offset+rav_og_data$dur,rav_og_data$Low.Freq..Hz.,rav_og_data$High.Freq..Hz.,
+                   rav_og_data$start_file,rav_og_data$end_file,rav_og_data$probs,rav_og_data$Comments,rav_og_data$procedure,rav_og_data$label,rav_og_data$signal_code,2)
+
+colnames(input)=colnames(template)[2:(length(input)+1)]
+
+dbAppendTable(con,"detections",input)
+
+
