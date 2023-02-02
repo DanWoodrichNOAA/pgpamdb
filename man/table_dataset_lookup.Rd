@@ -9,7 +9,8 @@ table_dataset_lookup(
   from_db_query,
   dataset,
   data_types,
-  interpret_as = NULL
+  interpret_as = NULL,
+  return_anything = FALSE
 )
 }
 \arguments{

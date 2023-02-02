@@ -53,16 +53,13 @@ i_neg_update <- function(conn,fgname,procedure,signal_code,high_freq = NULL){
 
   row = dbFetch(dbSendQuery(conn,query))
 
-  i_neg_confirm = row$effproc_assumption
-
-  if(i_neg_confirm!='i_neg'){
+  if(row$effproc_assumption!='i_neg'){
     stop("cannot confirm the section of effort as i_neg assumption on select procedure and signal code. Add entry to
          effort_procedures if assumption is correct")
   }
-
   #
 
-  dets = dbFetch(dbSendQuery(conn,paste("SELECT detections.* FROM detections JOIN bins_detections ON bins_detections.detections_id = detections.id JOIN bins ON bins.id = bins_detections.bins_id JOIN bins_effort ON bins.id = bins_effort.bins_id JOIN effort ON bins_effort.effort_id = effort.id WHERE effort.name = '",fgname,"' AND procedure = ",procedure," AND signal_code =",signal_code,sep="")))
+  dets = dbFetch(dbSendQuery(conn,paste("SELECT DISTINCT detections.* FROM detections JOIN bins_detections ON bins_detections.detections_id = detections.id JOIN bins ON bins.id = bins_detections.bins_id JOIN bins_effort ON bins.id = bins_effort.bins_id JOIN effort ON bins_effort.effort_id = effort.id WHERE effort.name = '",fgname,"' AND status = 1 AND procedure = ",procedure," AND signal_code =",signal_code,sep="")))
   FG = dbFetch(dbSendQuery(conn,paste("SELECT bins.*,soundfiles.datetime FROM bins JOIN bins_effort ON bins.id = bins_effort.bins_id JOIN effort ON bins_effort.effort_id = effort.id JOIN soundfiles ON bins.soundfiles_id = soundfiles.id WHERE effort.name = '",fgname,"'",sep="")))
 
   #delete any negatives that are already in there
@@ -108,47 +105,56 @@ i_neg_update <- function(conn,fgname,procedure,signal_code,high_freq = NULL){
   i_neg_out$start_file = as.integer(i_neg_out$start_file)
   i_neg_out$end_file = as.integer(i_neg_out$end_file)
 
-  det_negs$id = as.integer(det_negs$id)
-  det_negs$temp_id = NA
-
-  det_negs$start_file = as.integer(det_negs$start_file)
-  det_negs$end_file = as.integer(det_negs$end_file)
-
   i_neg_out$id = NA
   i_neg_out$temp_id = 1:nrow(i_neg_out)
 
-  combine_negs = rbind(i_neg_out[,c("id","temp_id","start_time","end_time","low_freq","high_freq","start_file","end_file","procedure","label","signal_code")],
-                       det_negs[,c("id","temp_id","start_time","end_time","low_freq","high_freq","start_file","end_file","procedure","label","signal_code")])
+  if(nrow(det_negs) > 0){
 
-  combine_negs$duplicated = duplicated(combine_negs[c(3:length(combine_negs))]) | duplicated(combine_negs[c(2:length(combine_negs))],fromLast = TRUE)
-  db_to_del = combine_negs$id[-which(combine_negs$duplicated)]
-  db_to_del = db_to_del[-which(is.na(db_to_del))]
+    det_negs$id = as.integer(det_negs$id)
+    det_negs$temp_id = NA
 
-  #delete on db if applicable
-  if(length(db_to_del)>0){
+    det_negs$start_file = as.integer(det_negs$start_file)
+    det_negs$end_file = as.integer(det_negs$end_file)
 
-    print("deleting existing negatives which now conflict...")
-    #don't hard delete since it will delete all dets even if procedure changed
-    table_delete(conn,'detections',db_to_del)
+    combine_negs = rbind(i_neg_out[,c("id","temp_id","start_time","end_time","low_freq","high_freq","start_file","end_file","procedure","label","signal_code")],
+                         det_negs[,c("id","temp_id","start_time","end_time","low_freq","high_freq","start_file","end_file","procedure","label","signal_code")])
 
-    det_negs2 = det_negs[which(det_negs$id %in% db_to_del),]
+    combine_negs$duplicated = duplicated(combine_negs[c(3:length(combine_negs))]) | duplicated(combine_negs[c(3:length(combine_negs))],fromLast = TRUE)
+    db_to_del = combine_negs$id[-which(combine_negs$duplicated)]
+    db_to_del = db_to_del[-which(is.na(db_to_del))]
 
-    #only delete from same procedure and signal code
-    dets_left = dbFetch(dbSendQuery(conn,paste("SELECT detections.* FROM detections WHERE original_id IN (",paste(as.integer(det_negs2$original_id),collapse=",",sep=""),") AND label = 0 AND procedure = ",procedure," AND status = 2 AND signal_code = ",signal_code,sep="")))
+    #delete on db if applicable
+    if(length(db_to_del)>0){
 
-    dets_left_id = as.integer(dets_left$id)
-    #print(dets_left_id)
-    if(length(dets_left_id)>0){
-      table_delete(conn,'detections',dets_left_id)
+      print("deleting existing negatives which now conflict...")
+      #don't hard delete since it will delete all dets even if procedure changed
+      table_delete(conn,'detections',db_to_del)
+
+      det_negs2 = det_negs[which(det_negs$id %in% db_to_del),]
+
+      #only delete from same procedure and signal code
+      dets_left = dbFetch(dbSendQuery(conn,paste("SELECT detections.* FROM detections WHERE original_id IN (",paste(as.integer(det_negs2$original_id),collapse=",",sep=""),") AND label = 0 AND procedure = ",procedure," AND status = 2 AND signal_code = ",signal_code,sep="")))
+
+      dets_left_id = as.integer(dets_left$id)
+      #print(dets_left_id)
+      if(length(dets_left_id)>0){
+        table_delete(conn,'detections',dets_left_id)
+      }
     }
-  }
 
-  local_to_push = combine_negs$temp_id[-which(combine_negs$duplicated)]
-  local_to_push = local_to_push[-which(is.na(local_to_push))]
+    local_to_push = combine_negs$temp_id[-which(combine_negs$duplicated)]
+    local_to_push = local_to_push[-which(is.na(local_to_push))]
+  }else{
+
+    local_to_push = i_neg_out$temp_id
+
+  }
 
   if(length(local_to_push)>0){
 
     i_neg_out = i_neg_out[which(i_neg_out$temp_id %in% local_to_push),]
+    i_neg_out$temp_id=NULL
+    i_neg_out$id = NULL
 
     print(paste("submitting i_neg data for effort name:",fgname,", procedure:",procedure,"and signal_code:",signal_code))
 
@@ -156,12 +162,16 @@ i_neg_update <- function(conn,fgname,procedure,signal_code,high_freq = NULL){
 
     print("data submitted!")
 
+    return(out)
+
   }else{
 
     print("no changes detected in positive data, leaving unchanged.")
+
+    return(0)
   }
 
-  return(out)
+
 
 }
 
@@ -908,7 +918,7 @@ vector_validate = function(conn,table,column,vector){
 
   query = paste("SELECT ",column," FROM ",table," WHERE ",column," IN ","(",spacer,paste(vector,collapse=paste(spacer,",",spacer,sep=""),sep=""),spacer,")",sep="")
 
-  out = dbFetch(dbSendQuery(con,query))
+  out = dbFetch(dbSendQuery(conn,query))
 
   if(length(vector[-which(vector %in% out$name)])==0){
 
