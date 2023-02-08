@@ -159,7 +159,7 @@ effort_table = data.frame(c("lm2gen_og_train","lm2gen_train_pos_set_no_olvp","lm
 
 colnames(effort_table) = c('name','sampling_method','description')
 
-dbAppendTable(con,'effort',effort_table)
+#dbAppendTable(con,'effort',effort_table)
 
 effort_table$id = 248:252
 
@@ -168,7 +168,7 @@ effort_table$id = 248:252
 effort_procedures = data.frame(effort_table$id,21,3,"train_eval","i_neg",c("y","y","y","n","n"))
 colnames(effort_procedures) = c("effort_id","procedures_id","signal_code","effproc_type","effproc_assumption","completed")
 
-dbAppendTable(con,'effort_procedures',effort_procedures)
+#dbAppendTable(con,'effort_procedures',effort_procedures)
 
 #now, need to make the table of bins+ effort id.
 allbins = list()
@@ -194,7 +194,7 @@ allbins = do.call("rbind",allbins)
 
 #so, can load this to db.
 
-dbAppendTable(con,'bins_effort',allbins)
+#dbAppendTable(con,'bins_effort',allbins)
 
 #alright, so the last two fgs were messed up since I didn't mandate that the bin type was 1.
 
@@ -242,6 +242,28 @@ dbAppendTable(con,'bins_effort',allbins)
 
 #give this a try.
 
+#at the bottom, show the plots of different fgs as I go through the process.
 
+#results of all lm data and deployment.
+lm_map = bin_label_explore(con,'lm',plot_sds = 2)
+plot(lm_map)
 
+#might go in reverse consectutive order. Also, perhaps, I sum up the total time, so that we can scale by color on these.
 
+lm_map_w_oggt = lm_map + add_layer_ble(con,3,10,'orange',c("lm2gen_og_train"))
+plot(lm_map_w_oggt)
+
+lm_map_w_pos = lm_map + add_layer_ble(con,3,13,'red',c("lm2gen_train_pos_set_no_olvp"))
+plot(lm_map_w_pos)
+
+lm_map_w_neg = lm_map_w_pos + add_layer_ble(con,3,12,'blue',c("lm2gen_train_rand_set_no_ovlp"))
+plot(lm_map_w_neg)
+
+lm_map_w_hardneg = lm_map_w_neg + add_layer_ble(con,3,10,'green',c("lm2gen_hardneg_ds"))
+plot(lm_map_w_hardneg)
+
+lm_map_w_weirdpos = lm_map_w_hardneg + add_layer_ble(con,3,10,'red',c("lm2gen_oddtp"))
+plot(lm_map_w_weirdpos)
+
+all_gt_map = lm_map + add_layer_ble(con,3,12,'blue',c("lm2gen_train_rand_set_no_ovlp")) + add_layer_ble(con,3,13,'red',c("lm2gen_train_pos_set_no_olvp"))+ add_layer_ble(con,3,10,'orange',c("lm2gen_og_train"))+ add_layer_ble(con,3,10,'green',c("lm2gen_hardneg_ds"))+ add_layer_ble(con,3,10,'cyan',c("lm2gen_oddtp"))
+plot(all_gt_map)

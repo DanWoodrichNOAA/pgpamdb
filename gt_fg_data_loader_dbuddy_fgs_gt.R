@@ -1,3 +1,41 @@
+upload_from_oldold <- function(conn,rav_og_data,fgname){
+
+  #load in raven file from path.
+
+  fg= dbFetch(dbSendQuery(con,paste("SELECT bins.*,soundfiles.name,soundfiles.duration FROM soundfiles JOIN bins ON bins.soundfiles_id = soundfiles.id JOIN bins_effort ON bins.id = bins_effort.bins_id JOIN effort ON effort.id = bins_effort.effort_id WHERE effort.name = '",fgname,"'",sep="")))
+
+  #rav_og_data = read.delim(bb_path)
+
+  #put fg in cons order
+
+  fg = fg[order(fg$name,fg$seg_start),]
+
+  fg$cons = c(0,cumsum(fg$seg_end-fg$seg_start)[1:length(cumsum(fg$seg_end-fg$seg_start))-1])
+
+  rav_og_data$dur = rav_og_data$End.Time..s.-rav_og_data$Begin.Time..s.
+
+  rav_og_data$start_file = fg$soundfiles_id[findInterval(rav_og_data$Begin.Time..s.,fg$cons)]
+  rav_og_data$end_file = fg$soundfiles_id[findInterval(rav_og_data$End.Time..s.,fg$cons)]
+
+  #no dets overlap files for this one.. all(rav_og_data$start_file==rav_og_data$end_file)
+
+  file_uniques = fg[which(fg$seg_start==0),]
+  file_uniques$cons = c(0,cumsum(file_uniques$duration)[1:nrow(file_uniques)-1])
+
+  rav_og_data$offset =rav_og_data$Begin.Time..s. - file_uniques$cons[findInterval(rav_og_data$Begin.Time..s.,file_uniques$cons)]
+
+  #think I have everything we need. load it in as dets.
+
+  template = dbFetch(dbSendQuery(con,'SELECT * FROM detections LIMIT 1'))
+
+  input = data.frame(rav_og_data$offset,rav_og_data$offset+rav_og_data$dur,rav_og_data$Low.Freq..Hz.,rav_og_data$High.Freq..Hz.,
+                     rav_og_data$start_file,rav_og_data$end_file,NA,"",10,1,6,2)
+
+  colnames(input)=colnames(template)[2:(length(input)+1)]
+
+  dbAppendTable(con,'detections',input)
+
+}
 
 
 #don't move this- most useful for old conversion..?
@@ -1190,44 +1228,6 @@ dbAppendTable(con,'detections',bb_all_db)
 bb_path = "//akc0ss-n086/NMML_CAEP_Acoustics/Detector/RavenBLEDscripts/Data/Selection tables/BB/RW09_EA_01Sum/RW09_EA_01_files_1-75.txt"
 bb_fgname = "RW09_EA_UM01_files_1-75_bb_hg"
 
-upload_from_oldold <- function(conn,path,fgname){
-
-  #load in raven file from path.
-
-  fg= dbFetch(dbSendQuery(con,paste("SELECT bins.*,soundfiles.name,soundfiles.duration FROM soundfiles JOIN bins ON bins.soundfiles_id = soundfiles.id JOIN bins_effort ON bins.id = bins_effort.bins_id JOIN effort ON effort.id = bins_effort.effort_id WHERE effort.name = '",fgname,"'",sep="")))
-
-  rav_og_data = read.delim(bb_path)
-
-  #put fg in cons order
-
-  fg = fg[order(fg$name,fg$seg_start),]
-
-  fg$cons = c(0,cumsum(fg$seg_end-fg$seg_start)[1:length(cumsum(fg$seg_end-fg$seg_start))-1])
-
-  rav_og_data$dur = rav_og_data$End.Time..s.-rav_og_data$Begin.Time..s.
-
-  rav_og_data$start_file = fg$soundfiles_id[findInterval(rav_og_data$Begin.Time..s.,fg$cons)]
-  rav_og_data$end_file = fg$soundfiles_id[findInterval(rav_og_data$End.Time..s.,fg$cons)]
-
-  #no dets overlap files for this one.. all(rav_og_data$start_file==rav_og_data$end_file)
-
-  file_uniques = fg[which(fg$seg_start==0),]
-  file_uniques$cons = c(0,cumsum(file_uniques$duration)[1:nrow(file_uniques)-1])
-
-  rav_og_data$offset =rav_og_data$Begin.Time..s. - file_uniques$cons[findInterval(rav_og_data$Begin.Time..s.,file_uniques$cons)]
-
-  #think I have everything we need. load it in as dets.
-
-  template = dbFetch(dbSendQuery(con,'SELECT * FROM detections LIMIT 1'))
-
-  input = data.frame(rav_og_data$offset,rav_og_data$offset+rav_og_data$dur,rav_og_data$Low.Freq..Hz.,rav_og_data$High.Freq..Hz.,
-                     rav_og_data$start_file,rav_og_data$end_file,NA,"",10,1,6,2)
-
-  colnames(input)=colnames(template)[2:(length(input)+1)]
-
-  dbAppendTable(con,'detections',input)
-
-}
 
 
 
@@ -1358,4 +1358,151 @@ colnames(input)=colnames(template)[2:(length(input)+1)]
 
 dbAppendTable(con,"detections",input)
 
+#going to upload the procedure where cole reviewed outputs of original lm detector at lower cutoff, use to compare with
+#new model
 
+#steps:
+#load in component files (partial gt and fg)
+#recalc raven file into single one based on cumdur
+#use 'upload_from_oldold' with combined raven to convert and upload.
+
+fg= dbFetch(dbSendQuery(con,paste("SELECT bins.*,soundfiles.name,soundfiles.duration FROM soundfiles JOIN bins ON bins.soundfiles_id = soundfiles.id JOIN data_collection ON soundfiles.data_collection_id = data_collection.id WHERE data_collection.name = 'BS13_AU_PM04' AND bins.type = 1",sep="")))
+
+#rav_og_data = read.delim(bb_path)
+
+#put fg in cons order
+
+fg = fg[order(fg$name,fg$seg_start),]
+
+fg$cons = c(0,cumsum(fg$seg_end-fg$seg_start)[1:length(cumsum(fg$seg_end-fg$seg_start))-1])
+
+justfiles = fg[-which(duplicated(fg$name)),]
+justfiles$cons =  c(0,cumsum(justfiles$duration[1:length(justfiles$duration)-1]))
+
+path = "//akc0ss-n086/NMML_CAEP_Acoustics/Detector/LFmoan_project/ColeAnalysis/BS13_AU_04b p99 analyzed/BS13_AU_04b New threshold"
+files = c("01BS13_AU_04b_files_All_LM_Model_Applied_probs_Cole_Reviewed.txt",
+          "02BS13_AU_04b_files_All_LM_Model_Applied_probs_Cole_Reviewed.txt",
+          "03BS13_AU_04b_files_All_LM_Model_Applied_probs_Cole_Reviewed.txt")
+coldat_13_M4 = list()
+
+for(i in 1:length(files)){
+
+  coldat_13_M4[[i]] = read.delim(paste(path,files[i],sep="/"))
+  coldat_13_M4[[i]] = coldat_13_M4[[i]][order(coldat_13_M4[[i]]$Begin.Time..s.),]
+  coldat_13_M4[[i]]$chunk = i
+}
+
+coldat_13_M4 = do.call('rbind',coldat_13_M4)
+
+coldat_13_M4$File_format = paste("AU-BSPM04",substr(coldat_13_M4$File,9,nchar(coldat_13_M4$File)),sep="")
+
+#get the db sf durations
+coldat_13_M4$file_dur = fg[match(coldat_13_M4$File_format,fg$name),"duration"]
+
+#ajust the times. found them in SFiles in \\akc0ss-n086\NMML_CAEP_Acoustics\Detector\Combined_sound_files\No_whiten_decimate_by_128, copied by hand.
+coldat_13_M4[which(coldat_13_M4$chunk==2),"Begin.Time..s."]= coldat_13_M4[which(coldat_13_M4$chunk==2),"Begin.Time..s."] + 4032000
+coldat_13_M4[which(coldat_13_M4$chunk==3),"Begin.Time..s."]= coldat_13_M4[which(coldat_13_M4$chunk==3),"Begin.Time..s."] + 4032000+ 4032000
+
+coldat_13_M4[which(coldat_13_M4$chunk==2),"End.Time..s."]= coldat_13_M4[which(coldat_13_M4$chunk==2),"End.Time..s."] + 4032000
+coldat_13_M4[which(coldat_13_M4$chunk==3),"End.Time..s."]= coldat_13_M4[which(coldat_13_M4$chunk==3),"End.Time..s."] + 4032000+ 4032000
+
+coldat_13_M4$dur = coldat_13_M4$End.Time..s.-coldat_13_M4$Begin.Time..s.
+
+coldat_13_M4$start_file = justfiles$soundfiles_id[findInterval(coldat_13_M4$Begin.Time..s.,justfiles$cons)]
+coldat_13_M4$end_file = justfiles$soundfiles_id[findInterval(coldat_13_M4$End.Time..s.,justfiles$cons)]
+
+coldat_13_M4$Begin.Time..s. = coldat_13_M4$Begin.Time..s. - justfiles$cons[findInterval(coldat_13_M4$Begin.Time..s.,justfiles$cons)]
+coldat_13_M4$End.Time..s. = coldat_13_M4$End.Time..s. - justfiles$cons[findInterval(coldat_13_M4$End.Time..s.,justfiles$cons)]
+
+coldat_13_M4$tempid = 1:nrow(coldat_13_M4)
+
+#have all the info I need to submit. But, I should put a temp id on these, so I can modify after with the post
+#review changes (Dan files).
+
+template = dbFetch(dbSendQuery(con,'SELECT * FROM detections LIMIT 1'))
+
+input = data.frame(coldat_13_M4$Begin.Time..s.,coldat_13_M4$End.Time..s.,coldat_13_M4$Low.Freq..Hz.,coldat_13_M4$High.Freq..Hz.,
+                   coldat_13_M4$start_file,coldat_13_M4$end_file,coldat_13_M4$LM.prob,coldat_13_M4$Comments,22,coldat_13_M4$Verification,3,2)
+
+colnames(input)=colnames(template)[2:(length(input)+1)]
+
+input$label[which(input$label=='n ')]="n"
+input$label[which(input$label=='')]="uk"
+
+lab_id = lookup_from_match(con,"label_codes",unique(input$label),"alias")
+input$label = lab_id$id[match(input$label,lab_id$alias)]
+
+#alright, can submit this.
+
+dbAppendTable(con,'detections',input)
+
+#alright, do the same for 'dan' detections.
+
+files = c("01BS13_AU_04b_files_All_LM_Model_Applied_probs_Cole_Reviewed_Dan_Reviewed.txt",
+          "02BS13_AU_04b_files_All_LM_Model_Applied_probs_Cole_Reviewed_Dan_Reviewed.txt",
+          "03BS13_AU_04b_files_All_LM_Model_Applied_probs_Cole_Reviewed_Dan_Reviewed.txt")
+dandat_13_M4 = list()
+
+for(i in 1:length(files)){
+
+  dandat_13_M4[[i]] = read.delim(paste(path,files[i],sep="/"))
+  dandat_13_M4[[i]] = dandat_13_M4[[i]][order(dandat_13_M4[[i]]$Begin.Time..s.),]
+  dandat_13_M4[[i]]$chunk = i
+}
+
+dandat_13_M4 = do.call('rbind',dandat_13_M4)
+
+dandat_13_M4$File_format = paste("AU-BSPM04",substr(dandat_13_M4$File,9,nchar(dandat_13_M4$File)),sep="")
+
+#get the db sf durations
+dandat_13_M4$file_dur = fg[match(dandat_13_M4$File_format,fg$name),"duration"]
+
+#ajust the times. found them in SFiles in \\akc0ss-n086\NMML_CAEP_Acoustics\Detector\Combined_sound_files\No_whiten_decimate_by_128, copied by hand.
+dandat_13_M4[which(dandat_13_M4$chunk==2),"Begin.Time..s."]= dandat_13_M4[which(dandat_13_M4$chunk==2),"Begin.Time..s."] + 4032000
+dandat_13_M4[which(dandat_13_M4$chunk==3),"Begin.Time..s."]= dandat_13_M4[which(dandat_13_M4$chunk==3),"Begin.Time..s."] + 4032000+ 4032000
+
+dandat_13_M4[which(dandat_13_M4$chunk==2),"End.Time..s."]= dandat_13_M4[which(dandat_13_M4$chunk==2),"End.Time..s."] + 4032000
+dandat_13_M4[which(dandat_13_M4$chunk==3),"End.Time..s."]= dandat_13_M4[which(dandat_13_M4$chunk==3),"End.Time..s."] + 4032000+ 4032000
+
+dandat_13_M4$dur = dandat_13_M4$End.Time..s.-dandat_13_M4$Begin.Time..s.
+
+dandat_13_M4$start_file = justfiles$soundfiles_id[findInterval(dandat_13_M4$Begin.Time..s.,justfiles$cons)]
+dandat_13_M4$end_file = justfiles$soundfiles_id[findInterval(dandat_13_M4$End.Time..s.,justfiles$cons)]
+
+dandat_13_M4$Begin.Time..s. = dandat_13_M4$Begin.Time..s. - justfiles$cons[findInterval(dandat_13_M4$Begin.Time..s.,justfiles$cons)]
+dandat_13_M4$End.Time..s. = dandat_13_M4$End.Time..s. - justfiles$cons[findInterval(dandat_13_M4$End.Time..s.,justfiles$cons)]
+
+onlydiff = dandat_13_M4[-which(paste(dandat_13_M4$Begin.Time..s.,dandat_13_M4$End.Time..s.,dandat_13_M4$start_file,dandat_13_M4$Verification) %in%
+                                 paste(coldat_13_M4$Begin.Time..s.,coldat_13_M4$End.Time..s.,coldat_13_M4$start_file,coldat_13_M4$Verification)),]
+
+onlydiff$procedure = 22
+
+onlydiff = data.frame(onlydiff$Begin.Time..s.,onlydiff$End.Time..s.,onlydiff$Low.Freq..Hz.,onlydiff$High.Freq..Hz.,
+                      onlydiff$start_file,onlydiff$end_file,onlydiff$LM.prob,onlydiff$Comments,22,onlydiff$Verification,3,2)
+
+colnames(onlydiff)=colnames(template)[2:(length(onlydiff)+1)]
+#for onlydiff, pull out of db to get ids
+
+onlydiff$start_file = as.integer(onlydiff$start_file)
+onlydiff$end_file = as.integer(onlydiff$end_file)
+
+w_ids = table_dataset_lookup(con,"SELECT * FROM detections",onlydiff[,c(1,2,5,6,7,9)],
+                             c("DOUBLE PRECISION","DOUBLE PRECISION","integer","integer","DOUBLE PRECISION","integer"))
+
+w_ids = w_ids[order(w_ids$start_time),]
+onlydiff = onlydiff[order(onlydiff$start_time),]
+
+#now they match= cbind ids, and update verification.
+
+ds = data.frame(w_ids$id,onlydiff$label)
+
+colnames(ds)=c("id","label")
+
+ds$label = lab_id$id[match(ds$label,lab_id$alias)]
+
+table_update(con,'detections',ds)
+
+#done!
+
+#how to compare stats? Don't at first- first visaulize model (upload detections, and then visualize) to see if it is
+#worth comparing. Then, pull all detections and come up with a quick script (midpoint) to compare performance.

@@ -1051,11 +1051,131 @@ detx_to_db <- function(conn,dataset){
 
 }
 
+# return a plot of a bin label distribution in our data, by % bins in month.
+
+bin_label_explore<-function(conn,bin_label,inst_source='AFSC',plot_sds = 4){
+
+  #bin_label= 'fw' #temp
+  #inst_source = "AFSC"
+
+  query = paste("SELECT ",bin_label,",count(*),date_trunc('month', soundfiles.datetime) AS dt_,data_collection.name,data_collection.location_code,data_collection.latitude
+                FROM bin_label_wide JOIN bins ON bins.id = bin_label_wide.id JOIN soundfiles ON bins.soundfiles_id = soundfiles.id JOIN data_collection ON data_collection.id = soundfiles.data_collection_id
+                WHERE bins.type = 1 AND data_collection.institution_source = '",inst_source,"' GROUP BY ",bin_label,",dt_,data_collection.name,data_collection.location_code,data_collection.latitude",sep="")
+
+  output = dbFetch(dbSendQuery(conn,gsub("[\r\n]", "", query)))
+
+  #cool, we've got it
+
+  #avg_lat for site
+  avg_lat = aggregate(output$latitude, list(output$location_code), FUN=function(x) mean(x,na.rm=TRUE))
+  colnames(avg_lat)=c("Site","Lat")
+
+  #combine output table so that 1/21 and 0/20 are combined, and 99s are distinct
+
+  output_mod = output
+
+  output_mod$common_label= 0
+
+  output_mod[which(output_mod[,bin_label]==21),"common_label"]=1
+  output_mod[which(output_mod[,bin_label]==1),"common_label"]=1
+  output_mod[which(output_mod[,bin_label]==0),"common_label"]=0
+  output_mod[which(output_mod[,bin_label]==20),"common_label"]=0
+  output_mod[which(output_mod[,bin_label]==99),"common_label"]=2
+
+  output_mod$count= as.integer(output_mod$count)
+
+  output_mod_agg =aggregate(output_mod$count, list(output_mod$dt,output_mod$name,output_mod$location_code,output_mod$latitude,output_mod$common_label), FUN=function(x) sum(x,na.rm=TRUE))
+
+  colnames(output_mod_agg)= c(colnames(output_mod[3:length(output_mod)]),"count")
+
+  output_mod_agg$count[which(output_mod_agg$common_label==2)]=NA
+
+  output_mod_agg$avg_lat = avg_lat[match(output_mod_agg$location_code,avg_lat$Site),"Lat"]
+
+  output_mod_agg$dt_num = as.numeric(output_mod_agg$dt_)
+  output_mod_agg$avg_lat_chr = as.character(round(output_mod_agg$avg_lat,2))
+
+
+  output_mod_agg$location_code =factor(output_mod_agg$location_code,level = unique(output_mod_agg$location_code[order(output_mod_agg$avg_lat_chr)]))
+
+  output_mod_agg$sub_na = FALSE
+
+  output_mod_agg[which(!is.na(output_mod_agg$count)),"sub_na"] = (paste(output_mod_agg[which(!is.na(output_mod_agg$count)),"dt_"],
+                                                                        output_mod_agg[which(!is.na(output_mod_agg$count)),"location_code"]) %in%
+                                                                    paste(output_mod_agg[which(is.na(output_mod_agg$count)),"dt_"],
+                                                                          output_mod_agg[which(is.na(output_mod_agg$count)),"location_code"]))
+
+  output_mod_agg_sub = output_mod_agg[which(output_mod_agg$sub_na),]
+
+  output_mod_agg = output_mod_agg[-which((paste(output_mod_agg$dt_,output_mod_agg$location_code) %in%
+                                            paste(output_mod_agg_sub$dt_,output_mod_agg_sub$location_code)) &
+                                           is.na(output_mod_agg$count)),]
+
+  output_mod_agg$count_adj = output_mod_agg$count* output_mod_agg$common_label
+
+  month_lookup = aggregate(output_mod_agg$count,list(output_mod_agg$dt_,output_mod_agg$name),sum)
+  colnames(month_lookup) = c("dt","name","total_bins")
+
+  output_mod_agg$count_adj = output_mod_agg$count_adj/ month_lookup$total_bins[match(paste(output_mod_agg$dt_,output_mod_agg$name),paste(month_lookup$dt,month_lookup$name))]
+
+  scale_midpoint = mean(output_mod_agg$count_adj,na.rm=TRUE)
+  scale_sd = sd(output_mod_agg$count_adj,na.rm=TRUE)
+
+  scale_max = scale_midpoint+ scale_sd*plot_sds
+
+  if(scale_max>1){
+    scale_max = 1
+  }
+
+  output_mod_agg[which(output_mod_agg$count_adj>scale_max),"count_adj"]=scale_max
+
+  base_map =ggplot(output_mod_agg, aes(dt_, location_code)) +
+    geom_tile(aes(fill = count_adj), color = "gray") +
+    geom_tile(data = output_mod_agg[which(output_mod_agg$count>0 & output_mod_agg$common_label==1),], color = "black",fill=NA) +
+    scale_fill_gradient2(limits=c(0, scale_max), low = "white", high= "purple",
+                         midpoint =  scale_midpoint) +
+    #scale_x_discrete(expand = c(0,0)) +
+    scale_x_datetime(date_breaks = "6 months" , date_labels = "%m-%y") +
+    ggtitle(expression(atop(bold("Test")))) +
+    theme(legend.title = element_text(size=12),
+          legend.text = element_text(size=12)) +
+    theme(axis.text = element_text(size=12),
+          axis.title.y = element_blank(),
+          axis.title.x = element_text(size = 12)) +
+    theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+    labs(fill = "count_adj")
+
+  return(base_map)
+
+}
+
+# add a layer, usually gt, to the bin label plot
+add_layer_ble<-function(conn,signal_code,procedure,color,fgnames=c(),inst_source='AFSC'){
+
+  if(length(fgnames)>0){
+    fgnames_join = "JOIN bins_detections ON detections.id = bins_detections.detections_id JOIN bins ON bins.id = bins_detections.bins_id JOIN bins_effort ON bins_effort.bins_id = bins.id JOIN effort ON effort.id = bins_effort.effort_id"
+
+    add_fgnames = paste("AND effort.name IN ('",paste(fgnames,collapse = "','",sep=""),"')",sep="")
+  }else{
+    fgnames_join = ""
+    add_fgnames = ""
+  }
+
+  query_layer = paste("SELECT DISTINCT date_trunc('month', soundfiles.datetime) AS dt_,data_collection.name,data_collection.location_code,data_collection.latitude
+  FROM detections JOIN soundfiles ON detections.start_file = soundfiles.id JOIN data_collection ON data_collection.id = soundfiles.data_collection_id ",fgnames_join,"
+  WHERE detections.signal_code = ",signal_code," AND detections.procedure = ",procedure," AND data_collection.institution_source = '",inst_source,"' ",add_fgnames," GROUP BY dt_,data_collection.name,data_collection.location_code,data_collection.latitude",sep="")
+
+  query_layer_out = dbFetch(dbSendQuery(conn,gsub("[\r\n]", "", query_layer)))
+
+  return(geom_point(data=query_layer_out, aes(x=dt_, y=location_code,z=NULL), fill = color, colour = 'black',pch=21,size =3))
+
+}
 
 
 #' @import RPostgres
 #' @import foreach
 #' @import tuneR
 #' @import utils
+#' @import ggplot
 NULL
 

@@ -875,3 +875,41 @@ colnames(moorings_not_tracked_ds)= "name"
 
 dbAppendTable(con,"data_collection",moorings_not_tracked_ds)
 
+
+#fix some accidentally deleted i_neg data from
+#don't worry about i_neg, just rerun the instinct vis to regenerate these.
+
+#affected fgs:
+
+# "no changes detected in positive data, leaving unchanged."
+# "deleting existing negatives which now conflict..."
+# "submitting i_neg data for effort name: lm2gen_og_train , procedure: 10 and signal_code: 3"
+# "data submitted!"
+# "deleting existing negatives which now conflict..."
+# "submitting i_neg data for effort name: LMyesSample_1 , procedure: 13 and signal_code: 3"
+# "data submitted!"
+# "deleting existing negatives which now conflict..."
+# "submitting i_neg data for effort name: oneHRonePerc , procedure: 12 and signal_code: 3"
+# "data submitted!"
+
+# "submitting i_neg data for effort name: lm2gen_train_pos_set_no_olvp , procedure: 13 and signal_code: 3"
+# "data submitted!"
+# "deleting existing negatives which now conflict..."
+# "submitting i_neg data for effort name: LMyesSample_1 , procedure: 13 and signal_code: 3"
+# "data submitted!"
+# "deleting existing negatives which now conflict..."
+# "submitting i_neg data for effort name: oneHRonePerc , procedure: 12 and signal_code: 3"
+
+#get all detections from these procedures, signal code 3, strength 2, which were deleted in the last 8 hrs.
+dbGet("SELECT LOCALTIMESTAMP")
+
+all_dels = dbGet("SELECT detections.* FROM detections JOIN bins_detections ON detections.id = bins_detections.detections_id
+                  JOIN bins ON bins.id = bins_detections.bins_id JOIN bins_effort ON bins_effort.bins_id = bins.id
+                  JOIN effort ON effort.id = bins_effort.effort_id WHERE effort.name IN ('lm2gen_og_train','LMyesSample_1','oneHRonePerc')
+                  AND procedure IN (10,12,13) AND signal_code = 3 AND strength = 2 AND status = 2 AND modified > '2023-02-03 20:00:00'")
+
+test = dbGet("SELECT * FROM detections WHERE modified = (SELECT MAX(modified) FROM detections WHERE signal_code = 3)")
+test = dbGet("SELECT *FROM detections WHERE signal_code = 3 AND status = 2 AND label = 1")
+
+
+

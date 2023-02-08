@@ -69,7 +69,8 @@ has_file2 = file.exists(paste("//nmfs/akc-nmml/CAEP/Acoustics/ANALYSIS/",newname
 moorings_done = dbFetch(dbSendQuery(con,"SELECT DISTINCT data_collection.name from soundfiles JOIN data_collection ON
                                      data_collection.id = soundfiles.data_collection_id"))
 fw_done = dbFetch(dbSendQuery(con,"SELECT DISTINCT data_collection.name,data_collection.historic_name from soundfiles JOIN data_collection ON
-                                     data_collection.id = soundfiles.data_collection_id JOIN detections ON detections.start_file = soundfiles.id"))
+                                     data_collection.id = soundfiles.data_collection_id JOIN detections ON detections.start_file = soundfiles.id
+                                     WHERE detections.signal_code IN (4,5,6)"))
 
 #this isn't considering old vs new names... oops! Means I have been submitting a lot of redundant moorings.
 #fixed

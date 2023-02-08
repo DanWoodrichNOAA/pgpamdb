@@ -1,0 +1,79 @@
+---
+title: "LM2gen_training"
+author: "Dan woodrich"
+date: "2/7/2023"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE,fig.width = 12, fig.height = 10)
+```
+
+## What is this document? 
+
+This is a demonstration of the process to utilize database data and detector outputs for use in data analysis and detector retraining. I am using a tool called RMarkdown, which allows for demonstration of code and plots in a document you can 
+read in your web browser. A similar tool is an online notebook, which lets you run and modify code on the fly, but since this document relies on a personal database connection it should be view only. 
+
+The demonstration features 
+1. Demonstration of database features and built in capabilities
+2. Visualization of low moan detector outputs
+3. Demonstration for how to select training data using data techniques
+
+
+## libraries
+
+Below are some libraries which we will call on, as well as an R file which represents the functions from 'pgpamdb', which is an R package I am developing to add value to our database. 
+
+```{r}
+#library(pgpamdb) 
+library(RPostgres)
+library(foreach)
+library(tuneR)
+library(ggplot2)
+
+source("./R/functions.R") #functions from in development R package pgpamdb
+
+#define a convenince function, which is not included in the pgpamdb package
+dbGet <-function(x){
+  x = gsub("[\r\n]", "", x)
+  dbFetch(dbSendQuery(con,x))
+}
+
+```
+## Connecting to the database. 
+
+The database connection relies on connection to the internet, the NOAA VPN, and several connection variables and keys which 
+we will provide. 
+
+```{r}
+source("./etc/paths.R") #This populates connection variables for my personal user account to the database
+con=pamdbConnect("poc_v2",keyscript,clientkey,clientcert)
+```
+
+## What has happened prior to this document? 
+
+The low moan detector has been run on a number of AFSC mooring deployments. The reviewed detections from the low moan deployment have been loaded to the database. In addition, I uploaded "assumed negative" detections on the scale of LOW bins (300s). This means that if a LOW bin does not contain any low moan detections which were marked yes by either Cole or I, the time boundaries of this bin will be submitted as a 'procedure negative', meaning a negative which has not been confirmed directly by an analyst. This is opposed to a true negative, which has been. 
+
+In fact, let's take a glance at these codes: we will use a SQL query to ask the database for the names, and shorthand and integer codes of the labels on the database. 
+
+```{r}
+db_labels_explained = dbGet("SELECT name,alias AS shorthand,id FROM label_codes")
+print(db_labels_explained[order(db_labels_explained$id),])
+```
+
+In addition to the low moan detector deployment, two accessory analyses were completed and loaded to the database. The first was Cole Watson's review of 'positive' data: data segments containing a verified low moan were presented to Cole for comprehensive boxing. The second was a selection of random data: cole reviewed data selected randomly from each month from 2012 to 2019 over Bering sea moorings. 
+
+These additional data sources are valuable additions to a detector retraining, which is the subject of this document. 
+
+## How to inventory our data? 
+
+Before we can start selecting training data, we first need a way to visualize where effort and detections exist for low moans. By analyzing our data in this way, we can better prioritize a wide spatiotemporal distribution for a robust model.
+
+When data are loaded into the database, it automatically updates a table which can be queried to understand the presence and absence of the given signal. Let's see how low moans effort and presence are distributed across our full dataset. 
+
+Let's use a convenience function from our R package to create a panoptic view of low moans in our data 
+
+```{r}
+lm_map = bin_label_explore(con,'lm',plot_sds = 2) #plot_sds is standard deviations for the color scale, defaults to 4
+plot(lm_map)
+```
