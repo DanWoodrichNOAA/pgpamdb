@@ -1053,6 +1053,8 @@ detx_to_db <- function(conn,dataset){
 
 # return a plot of a bin label distribution in our data, by % bins in month.
 
+#todo: instead of querying by source= afsc, should query by location codes in which source is afsc!
+#that way, will correctly grab older moorings which we aquired.
 bin_label_explore<-function(conn,bin_label,inst_source='AFSC',plot_sds = 4){
 
   #bin_label= 'fw' #temp

@@ -38,11 +38,11 @@ lm2gen_og_train = dbGet("SELECT bins.id FROM bins JOIN bins_effort ON bins_effor
 lm2gen_og_train = as.integer(lm2gen_og_train$id)
 
 #great. Now, load in lmpos train.
-lm2gen_train_pos_set_no_olvp = dbGet("SELECT bins_id FROM bins_effort WHERE effort_id = 76") #LMyesSample_1
+lm2gen_train_pos_set_no_ovlp = dbGet("SELECT bins_id FROM bins_effort WHERE effort_id = 76") #LMyesSample_1
 
-lm2gen_train_pos_set_no_olvp = as.integer(lm2gen_train_pos_set_no_olvp$bins_id)
+lm2gen_train_pos_set_no_ovlp = as.integer(lm2gen_train_pos_set_no_ovlp$bins_id)
 
-lm2gen_train_pos_set_no_olvp = lm2gen_train_pos_set_no_olvp[-which(lm2gen_train_pos_set_no_olvp %in% lm2gen_og_train)]
+lm2gen_train_pos_set_no_ovlp = lm2gen_train_pos_set_no_ovlp[-which(lm2gen_train_pos_set_no_ovlp %in% lm2gen_og_train)]
 
 #great. now load in lmneg train
 
@@ -50,7 +50,7 @@ lm2gen_train_rand_set_no_ovlp = dbGet("SELECT bins_id FROM bins_effort WHERE eff
 
 lm2gen_train_rand_set_no_ovlp = as.integer(lm2gen_train_rand_set_no_ovlp$bins_id)
 
-lm2gen_train_rand_set_no_ovlp = lm2gen_train_rand_set_no_ovlp[-which(lm2gen_train_rand_set_no_ovlp %in% c(lm2gen_train_pos_set_no_olvp,lm2gen_og_train))]
+lm2gen_train_rand_set_no_ovlp = lm2gen_train_rand_set_no_ovlp[-which(lm2gen_train_rand_set_no_ovlp %in% c(lm2gen_train_pos_set_no_ovlp,lm2gen_og_train))]
 
 #great. those are all taken care of. Now, need to load in bins corresponding to 'hard negatives'.
 
@@ -70,7 +70,7 @@ lm2gen_hardneg =dbGet("SELECT DISTINCT bins.id FROM bins JOIN bins_detections ON
 
 lm2gen_hardneg = as.integer(lm2gen_hardneg$id)
 
-length(lm2gen_hardneg[-which(lm2gen_hardneg %in% c(lm2gen_train_rand_set_no_ovlp,lm2gen_train_pos_set_no_olvp,lm2gen_og_train))])
+length(lm2gen_hardneg[-which(lm2gen_hardneg %in% c(lm2gen_train_rand_set_no_ovlp,lm2gen_train_pos_set_no_ovlp,lm2gen_og_train))])
 
 #.95 cutoff resulted in 6071 returned rows- I could either move up the probability threshold, or I could further sample
 #from this.
@@ -78,7 +78,7 @@ length(lm2gen_hardneg[-which(lm2gen_hardneg %in% c(lm2gen_train_rand_set_no_ovlp
 #I am partial to further random sampling of this selection. Reason being, is that I expect the ultra high values to be
 #less variable in the signals they represent.
 
-lm2gen_hardneg = lm2gen_hardneg[-which(lm2gen_hardneg %in% c(lm2gen_train_rand_set_no_ovlp,lm2gen_train_pos_set_no_olvp,lm2gen_og_train))]
+lm2gen_hardneg = lm2gen_hardneg[-which(lm2gen_hardneg %in% c(lm2gen_train_rand_set_no_ovlp,lm2gen_train_pos_set_no_ovlp,lm2gen_og_train))]
 
 #downsample this
 lm2gen_hardneg_ds = sample(lm2gen_hardneg,round(length(lm2gen_hardneg)/3))
@@ -133,7 +133,7 @@ lm2gen_oddtp = as.integer(lm2gen_oddtp$id)
 
 #remove duplicates:
 
-lm2gen_oddtp = lm2gen_oddtp[-which(lm2gen_oddtp %in% c(lm2gen_train_pos_set_no_olvp,lm2gen_train_rand_set_no_ovlp,lm2gen_hardneg_ds,lm2gen_og_train))]
+lm2gen_oddtp = lm2gen_oddtp[-which(lm2gen_oddtp %in% c(lm2gen_train_pos_set_no_ovlp,lm2gen_train_rand_set_no_ovlp,lm2gen_hardneg_ds,lm2gen_og_train))]
 
 
 #downsample by a third:
@@ -149,13 +149,13 @@ dbGet("SELECT COUNT(bins.type) FROM bins JOIN bins_effort ON bins.id = bins_effo
 #great- so now, declare and populate the new fgs.
 #need entry in effort, effort_procedures, then in bins_effort.
 
-effort_table = data.frame(c("lm2gen_og_train","lm2gen_train_pos_set_no_olvp","lm2gen_train_rand_set_no_ovlp","lm2gen_hardneg_ds","lm2gen_oddtp_ds"),
+effort_table = data.frame(c("lm2gen_og_train","lm2gen_train_pos_set_no_ovlp","lm2gen_train_rand_set_no_ovlp","lm2gen_hardneg_ds","lm2gen_oddtp_ds"),
                           c("semi-random no overlap","high grade random no overlap","random no overlap","hard negative downsampled","procedural"),
                           c("The ground truth training used in the previous LM detector: BS13_AU_PM02-a_files_343-408_lm, BS14_AU_PM04_files_189-285_lm, BS14_AU_PM04_files_304-430_lm, BS14_AU_PM04_files_45-188_lm, BS13_AU_PM02-a_files_38-122_lm, BS13_AU_PM02-a_files_510-628_lm",
                             "LMyesSample_1 without overlap from lm2gen_og_train (1st gen training set)",
-                            "oneHRonePerc without overlap from lm2gen_og_train (1st gen training set) OR lm2gen_train_pos_set_no_olvp",
-                            "Hard negatives from LM 1st gen detector deployment. >=.95 probability, and downsampled by factor of 9. No overlap with lm2gen_og_train, lm2gen_train_pos_set_no_olvp, lm2gen_train_rand_set_no_ovlp",
-                            "True positives from less common sites (minus all with > 100 LM tp/mooring deployment avg: BS03 PM02 PM04) from LM 1st gen deployment. no overlap with lm2gen_og_train, lm2gen_train_pos_set_no_olvp, lm2gen_train_rand_set_no_ovlp, or lm2gen_hardneg_ds"))
+                            "oneHRonePerc without overlap from lm2gen_og_train (1st gen training set) OR lm2gen_train_pos_set_no_ovlp",
+                            "Hard negatives from LM 1st gen detector deployment. >=.95 probability, and downsampled by factor of 9. No overlap with lm2gen_og_train, lm2gen_train_pos_set_no_ovlp, lm2gen_train_rand_set_no_ovlp",
+                            "True positives from less common sites (minus all with > 100 LM tp/mooring deployment avg: BS03 PM02 PM04) from LM 1st gen deployment. no overlap with lm2gen_og_train, lm2gen_train_pos_set_no_ovlp, lm2gen_train_rand_set_no_ovlp, or lm2gen_hardneg_ds"))
 
 colnames(effort_table) = c('name','sampling_method','description')
 
@@ -176,7 +176,7 @@ allbins = list()
 allbins[[1]] = data.frame(lm2gen_og_train,248)
 colnames(allbins[[1]]) = c("bins_id","effort_id")
 
-allbins[[2]] = data.frame(lm2gen_train_pos_set_no_olvp,249)
+allbins[[2]] = data.frame(lm2gen_train_pos_set_no_ovlp,249)
 colnames(allbins[[2]]) = c("bins_id","effort_id")
 
 allbins[[3]] = data.frame(lm2gen_train_rand_set_no_ovlp,250)
@@ -253,7 +253,7 @@ plot(lm_map)
 lm_map_w_oggt = lm_map + add_layer_ble(con,3,10,'orange',c("lm2gen_og_train"))
 plot(lm_map_w_oggt)
 
-lm_map_w_pos = lm_map + add_layer_ble(con,3,13,'red',c("lm2gen_train_pos_set_no_olvp"))
+lm_map_w_pos = lm_map + add_layer_ble(con,3,13,'red',c("lm2gen_train_pos_set_no_ovlp"))
 plot(lm_map_w_pos)
 
 lm_map_w_neg = lm_map_w_pos + add_layer_ble(con,3,12,'blue',c("lm2gen_train_rand_set_no_ovlp"))
@@ -265,5 +265,5 @@ plot(lm_map_w_hardneg)
 lm_map_w_weirdpos = lm_map_w_hardneg + add_layer_ble(con,3,10,'red',c("lm2gen_oddtp"))
 plot(lm_map_w_weirdpos)
 
-all_gt_map = lm_map + add_layer_ble(con,3,12,'blue',c("lm2gen_train_rand_set_no_ovlp")) + add_layer_ble(con,3,13,'red',c("lm2gen_train_pos_set_no_olvp"))+ add_layer_ble(con,3,10,'orange',c("lm2gen_og_train"))+ add_layer_ble(con,3,10,'green',c("lm2gen_hardneg_ds"))+ add_layer_ble(con,3,10,'cyan',c("lm2gen_oddtp"))
+all_gt_map = lm_map + add_layer_ble(con,3,12,'blue',c("lm2gen_train_rand_set_no_ovlp")) + add_layer_ble(con,3,13,'red',c("lm2gen_train_pos_set_no_ovlp"))+ add_layer_ble(con,3,10,'orange',c("lm2gen_og_train"))+ add_layer_ble(con,3,10,'green',c("lm2gen_hardneg_ds"))+ add_layer_ble(con,3,10,'cyan',c("lm2gen_oddtp"))
 plot(all_gt_map)
