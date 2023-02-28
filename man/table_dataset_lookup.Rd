@@ -23,6 +23,8 @@ table_dataset_lookup(
 \item{data_types}{The postgresql target column data types. Must be provided and explicit.}
 
 \item{interpret_as}{Ordered vector which maps dataset columns to database (including join syntax, if required) columns}
+
+\item{return_anything}{If the output df is different sized than the input, return it anyway, otherwise return error}
 }
 \value{
 a data frame corresponding to returned columns specified in 'from_db_query' argument

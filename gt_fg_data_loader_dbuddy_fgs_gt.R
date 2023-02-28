@@ -39,14 +39,20 @@ upload_from_oldold <- function(conn,rav_og_data,fgname){
 
 
 #don't move this- most useful for old conversion..?
-fg_breakbins <-function(data,interval){
+fg_breakbins <-function(data,interval,format='db'){
 
   out_bins = list()
 
   for(n in 1:nrow(data)){
 
-    a = data$SegStart[n]
-    b = (data$SegDur[n]+data$SegStart[n])
+    if(format=="DETx"){
+      a = data$SegStart[n]
+      b = (data$SegDur[n]+data$SegStart[n])
+    }else if(format=="db"){
+      a = data$seg_start[n]
+      b = data$seg_end[n]
+    }
+
     c = interval
 
     breaks = as.numeric(unique(cut(c((a+0.000001):(b-0.000001)), seq(0, 100000, by=c), include.lowest = F)))
@@ -60,16 +66,27 @@ fg_breakbins <-function(data,interval){
 
     dur = end-start
 
-    if("SiteID" %in% colnames(data)){
+    if(format=="DETx"){
 
-      out_ = data.frame(data$FileName[n],data$FullPath[n],data$StartTime[n],data$Duration[n],data$Deployment[n],start,dur,data$SiteID[n])
+      if("SiteID" %in% colnames(data)){
 
-    }else{
+        out_ = data.frame(data$FileName[n],data$FullPath[n],data$StartTime[n],data$Duration[n],data$Deployment[n],start,dur,data$SiteID[n])
 
-      out_ = data.frame(data$FileName[n],data$FullPath[n],data$StartTime[n],data$Duration[n],data$Deployment[n],start,dur)
+      }else{
+
+        out_ = data.frame(data$FileName[n],data$FullPath[n],data$StartTime[n],data$Duration[n],data$Deployment[n],start,dur)
+
+      }
+
+    }else if(format=="db"){
+
+      if("name..5" %in% colnames(data)){
+        out_ = data.frame(data$name,data$duration,data$name..5,seg_start,seg_end)
+      }else{
+        out_ = data.frame(data$name,data$duration,seg_start,seg_end)
+      }
 
     }
-
     colnames(out_) = colnames(data)
     out_bins[[n]] = out_
   }
@@ -154,7 +171,7 @@ submit_fg<-function(con,fgdata,name,sampling_method,description,insert_nonmatchi
 }
 
 #don't submit- needs a rewrite to db standard.
-bin_negatives<-function(data,FG,bintype,analyst){
+bin_negatives<-function(data,FG,bintype,analyst='previous',procedure = NULL,signal_code =NULL,format='db'){
 
   out_negs = vector("list",2)
 
@@ -170,19 +187,103 @@ bin_negatives<-function(data,FG,bintype,analyst){
 
   #assume the data comes in is in detx format.
 
+  if(format=='db'){
+    yes_ = 1
+    yes_2 = 21
+    no_2 = 20
+
+    sf_col= 'start_file'
+    ef_col= 'end_file'
+
+    et_col = 'end_time'
+    st_col = 'start_time'
+
+    if('name' %in% FG){
+      fgfn = "name"
+    }else{
+      fgfn = "soundfiles_id"
+    }
+
+
+    colind_remove = c()
+
+
+    if(is.null(analyst)){
+      analyst="placeholder"
+      colind_remove = c(colind_remove,13)
+
+    }else if(analyst=='previous'){
+      analyst = data$analyst[1]
+    }
+
+    if(is.null(procedure)){
+
+      procedure= data$procedure[1]
+    }
+
+    if(is.null(signal_code)){
+
+      signal_code= data$signal_code[1]
+    }
+
+  }else if(format=='DETx'){
+
+    yes_ = 'y'
+    yes_2 = 'py'
+    no_2 = 'pn'
+
+    sf_col= 'StartFile'
+    sf_col= 'EndFile'
+
+    et_col = 'StartTime'
+    st_col = 'EndTime'
+
+    fgfn = "FileName"
+
+    if(analyst=='previous'){
+      analyst = data$LastAnalyst[1]
+    }
+
+    if(is.null(procedure)){
+
+      stop("procedure must be specific for DETx")
+    }
+
+    if(is.null(signal_code)){
+
+      signal_code= data$SignalCode[1]
+    }
+
+
+  }
+
   #for this comparison, only need the 'y' label detections
 
-  data = data[which(data$label=='y' | data$label=='py'),]
+  data = data[which(data$label==yes_ | data$label==yes_2),]
 
-  sfs_w_yes = unique(data$StartFile,data$EndFile)
+  sfs_w_yes = unique(data[,sf_col],data[,ef_col])
 
-  fg_w_no = FG[-which(FG$FileName %in% sfs_w_yes),]
+  if(length(sfs_w_yes)>0){
+    fg_w_no = FG[-which(FG[,fgfn] %in% sfs_w_yes),]
+  }else{
+    fg_w_no = fg
+  }
+
 
   if(nrow(fg_w_no)>0){
 
-    no_dets_frame = data.frame(0,fg_w_no$Duration,0,highfreq,fg_w_no$FileName,fg_w_no$FileName,NA,highfreq,'pn',"",data$SignalCode[1],"DET",9999,analyst)
+    if(format=='DETx'){
+      no_dets_frame = data.frame(0,fg_w_no$Duration,0,highfreq,fg_w_no[,fgfn],fg_w_no[,fgfn],NA,highfreq,'pn',"",signal_code,"DET",9999,analyst)
 
-    colnames(no_dets_frame)=colnames(data)
+      colnames(no_dets_frame)=colnames(data)
+    }else if(format=='db'){
+      no_dets_frame = data.frame(0,fg_w_no$duration,0,highfreq,fg_w_no[,fgfn],fg_w_no[,fgfn],NA,"",procedure,no_2,signal_code,2,analyst)
+      colnames(no_dets_frame)=c("start_time","end_time","low_freq","high_freq","start_file","end_file",
+                                "probability","comments","procedure","label","signal_code","strength","analyst")
+      if(length(colind_remove)>0){
+        no_dets_frame = no_dets_frame[,-colind_remove]
+      }
+    }
 
     if(any(duplicated(no_dets_frame))){
       no_dets_frame = no_dets_frame[-which(duplicated(no_dets_frame)),]
@@ -194,14 +295,15 @@ bin_negatives<-function(data,FG,bintype,analyst){
 
   #now go through the file which do have detections, and determine the negative bins.
 
-  fg_w_yes = FG[which(FG$FileName %in% sfs_w_yes),]
+  fg_w_yes = FG[which(FG[,fgfn] %in% sfs_w_yes),]
 
 
 
   if(nrow(fg_w_yes)>0){
 
     #make sure fg_w_yes is broken into correct interval for this
-    fg_w_yes = fg_breakbins(fg_w_yes,interval)
+    #to do: also make this function work with db fg names/types.
+    fg_w_yes = fg_breakbins(fg_w_yes,interval,format = format)
 
     rows = list()
 
@@ -212,23 +314,43 @@ bin_negatives<-function(data,FG,bintype,analyst){
     for(i in 1:nrow(fg_w_yes)){
       #this is now quite simple- if there are any start or end times within the fg row, call it yes, otherwise spit out no.
 
-      endtimes = data[which(data$EndFile==fg_w_yes$FileName[i] & ((data$EndTime<fg_w_yes$SegStart[i]+fg_w_yes$SegDur[i]) & (data$EndTime>fg_w_yes$SegStart[i]))),"EndTime"]
-      starttimes = data[which(data$StartFile==fg_w_yes$FileName[i] & ((data$StartTime<fg_w_yes$SegStart[i]+fg_w_yes$SegDur[i]) & (data$StartTime>fg_w_yes$SegStart[i]))),"StartTime"]
+      if(format ==db){
+        st = fg_w_yes$seg_start[i]
+        et =fg_w_yes$seg_end[i]
+      }else if(format=='DETx'){
+        st = fg_w_yes$SegStart[i]
+        et =fg_w_yes$SegStart[i]+fg_w_yes$SegDur[i]
+      }
+
+      endtimes = data[which(data[,ef_col]==fg_w_yes[,fgfn][i] & ((data[,et_col]<et) & (data[,et_col]>st))),"EndTime"]
+      starttimes = data[which(data[,sf_col]==fg_w_yes[,fgfn][i] & ((data[,st_col]<et) & (data[,st_col]>st))),"StartTime"]
 
       if(length(endtimes)==0 & length(starttimes)==0){
         #no detection, so bin is a pn
         counter = counter + 1
 
-        rows[[i]] = c(fg_w_yes$SegStart[i],fg_w_yes$SegStart[i]+fg_w_yes$SegDur[i],0,highfreq,fg_w_yes$FileName[i],fg_w_yes$FileName[i],NA,highfreq,'pn',"",data$SignalCode[1],"DET",9999,analyst)
+
+        if(format=='DETx'){
+          rows[[i]] = c(st,et,0,highfreq,fg_w_yes[,fgfn],fg_w_yes[,fgfn],NA,highfreq,'pn',"",data$SignalCode[1],"DET",9999,analyst)
+
+        }else if(format=='db'){
+          rows[[i]] = c(st,et,0,highfreq,fg_w_yes[,fgfn],fg_w_yes[,fgfn],NA,"",procedure,no_2,signal_code,2,analyst)
+
+        }
+
+
       }
     }
 
 
     if(length(rows)>0){
       rows = do.call('rbind',rows)
-
-      colnames(rows)=colnames(data)
-
+      if(format=='DETx'){
+        colnames(rows)=colnames(data)
+      }else if(format=='db'){
+        colnames(rows)=c("start_time","end_time","low_freq","high_freq","start_file","end_file",
+                                  "probability","comments","procedure","label","signal_code","strength","analyst")[-colind_remove]
+      }
       out_negs[[2]] = rows
 
     }
@@ -1506,3 +1628,497 @@ table_update(con,'detections',ds)
 
 #how to compare stats? Don't at first- first visaulize model (upload detections, and then visualize) to see if it is
 #worth comparing. Then, pull all detections and come up with a quick script (midpoint) to compare performance.
+
+
+#now, upload results from full detector.
+
+#here is the csv extracted from a pipeline- don't quite want to build out full procedure yet for verification.
+
+dets = read.csv("//akc0ss-n086/NMML_CAEP_Acoustics/Detector/Datasets_transfer/DETx.csv.gz")
+
+template = dbFetch(dbSendQuery(con,"SELECT * FROM detections LIMIT 1"))
+
+colnames(dets)[1:7]=colnames(template)[2:8]
+
+#BS13_AU_PM04
+dets$FGID=NULL
+dets$splits=NULL
+
+#format to db format
+
+file_lookup = lookup_from_match(con,"soundfiles",unique(c(dets$start_file,dets$end_file)),"name")
+
+dets$start_file = file_lookup$id[match(dets$start_file,file_lookup$name)]
+dets$end_file = file_lookup$id[match(dets$end_file,file_lookup$name)]
+
+dets$comments = ""
+dets$procedure = 21
+dets$label = 21
+dets$signal_code = 3
+dets$strength = 1
+
+#dbAppendTable(con,'detections',dets)
+#now to submit the negatives, slightly different needs here
+
+
+fgquery = gsub("[\r\n]", "",paste("SELECT soundfiles.name,'','',duration,data_collection.name,bins.seg_start,bins.seg_end-bins.seg_start FROM soundfiles JOIN data_collection ON data_collection.id
+                                  = soundfiles.data_collection_id JOIN bins ON bins.soundfiles_id = soundfiles.id WHERE bins.type = 1 AND data_collection.name = 'BS13_AU_PM04'",sep=""))
+
+allfg = dbFetch(dbSendQuery(con,fgquery))
+
+colnames(allfg) =c("FileName" ,"FullPath" ,"StartTime","Duration" ,"Deployment","SegStart"   ,"SegDur")
+dets_og = read.csv("//akc0ss-n086/NMML_CAEP_Acoustics/Detector/Datasets_transfer/DETx.csv.gz")
+
+dets_og$visible_hz = ""
+dets_og$label='py'
+dets_og$uk= ""
+dets_og$SignalCode = 'LM'
+dets_og$type= ""
+dets_og$uk2 = ""
+dets_og$analyst="DFW"
+
+dets_og$splits = NULL
+dets_og$FGID=NULL
+
+alldata_negs = bin_negatives(dets_og,allfg,"LOW","DFW")
+
+colnames(alldata_negs)[1:7]=colnames(template)[2:8]
+
+file_lookup = lookup_from_match(con,"soundfiles",unique(c(alldata_negs$start_file,alldata_negs$end_file)),"name")
+
+alldata_negs$start_file = file_lookup$id[match(alldata_negs$start_file,file_lookup$name)]
+alldata_negs$end_file = file_lookup$id[match(alldata_negs$end_file,file_lookup$name)]
+
+
+alldata_negs$visible_hz = NULL
+alldata_negs$uk = NULL
+alldata_negs$uk2 = NULL
+alldata_negs$SignalCode = NULL
+alldata_negs$type = NULL
+alldata_negs$analyst = NULL
+
+
+alldata_negs$comments = ""
+alldata_negs$procedure = 21
+alldata_negs$label = 20
+alldata_negs$signal_code = 3
+alldata_negs$strength = 1
+
+dbAppendTable(con,'detections',alldata_negs)
+dbSendQuery(con,"DELETE FROM detections WHERE modified = '2023-02-14 00:00:48.030469+00'")
+
+#load in a mooring which didn't make it in-
+
+#give bin negatives a try with db format.
+#load in the fg and 'dets' for
+
+#see if dets got loaded in:
+
+test = dbFetch(dbSendQuery(con,"SELECT * FROM detections JOIN soundfiles ON detections.start_file = soundfiles.id JOIN data_collection ON soundfiles.data_collection_id = data_collection.id WHERE data_collection.name = 'AW15_AU_PH01' AND detections.procedure = 5"))
+
+#doesn't look like it
+
+fg = dbFetch(dbSendQuery(con,"SELECT bins.*,duration FROM bins JOIN soundfiles ON bins.soundfiles_id = soundfiles.id JOIN data_collection ON soundfiles.data_collection_id = data_collection.id WHERE data_collection.name = 'AW15_AU_PH01' AND bins.type = 1"))
+dets = dbFetch(dbSendQuery(con,"SELECT * FROM detections LIMIT 0"))
+
+dets$start_file = as.integer(dets$start_file)
+dets$end_file = as.integer(dets$end_file)
+
+fg$soundfiles_id = as.integer(fg$soundfiles_id)
+
+test= bin_negatives(dets,fg,"LOW",analyst = NULL,procedure = 5,signal_code = 3)
+
+dbAppendTable(con,"detections",test)
+
+test = bin_label_explore(con,"fw")
+test2 = bin_label_explore(con,"lm")
+
+#looking into possibility of bugged data. I know that BS15_AU_PM04 was bugged for fin whales, so also checking it out for
+#low moans.
+
+#test out capability to assess lm detector deployment for 1. completeness 2. correctness.
+#for this one, safe to assume that only full moorings are run.
+#let's start out with a query # of bins in mooring where a 1 or 20 are present, divided by total bins.
+
+bins_w_analysis = "SELECT COUNT(*),subquery.name FROM (SELECT DISTINCT ON (bins.id) COUNT(*),data_collection.name FROM detections JOIN bins_detections ON bins_detections.detections_id = detections.id JOIN bins ON bins.id = bins_detections.bins_id
+ JOIN soundfiles ON bins.soundfiles_id = soundfiles.id JOIN data_collection ON data_collection.id = soundfiles.data_collection_id WHERE bins.type = 1 AND detections.label IN (1,20) AND detections.procedure = 5 GROUP BY bins.id,data_collection.name) AS subquery GROUP BY subquery.name"
+
+dbGet <-function(x){
+  x = gsub("[\r\n]", "", x)
+  dbFetch(dbSendQuery(con,x))
+}
+
+bins_w_analysis_out = dbGet(bins_w_analysis)
+
+allbins = "SELECT COUNT(*),data_collection.name FROM bins JOIN soundfiles ON bins.soundfiles_id = soundfiles.id JOIN data_collection ON data_collection.id =
+soundfiles.data_collection_id WHERE bins.type = 1 GROUP BY data_collection.name"
+
+bins_all = dbGet(allbins)
+
+comp = merge(bins_w_analysis_out,bins_all,by="name",all.y = TRUE)
+
+comp$perc = comp$count.x/comp$count.y
+
+#look at the bins which are in disagreement.
+
+bins_w_analysis_disagree = "SELECT COUNT(*),subquery.name FROM (SELECT DISTINCT ON (bins.id) COUNT(*),data_collection.name FROM detections JOIN bins_detections ON bins_detections.detections_id = detections.id JOIN bins ON bins.id = bins_detections.bins_id
+ JOIN soundfiles ON bins.soundfiles_id = soundfiles.id JOIN data_collection ON data_collection.id = soundfiles.data_collection_id WHERE bins.type = 1 AND detections.label IN (1,20) AND detections.procedure = 5 GROUP BY bins.id,data_collection.name) AS subquery WHERE subquery.count = 2 GROUP BY subquery.name"
+
+#bins_w_analysis_disagree_out = dbGet(bins_w_analysis)
+
+
+#find the bins in BS09_AU_PM02-a which don't have labels for 5
+
+missing_5 = "SELECT * FROM bins JOIN soundfiles ON bins.soundfiles_id = soundfiles.id JOIN data_collection ON data_collection.id = soundfiles.data_collection_id
+ WHERE data_collection.name = 'BS09_AU_PM02-a' AND bins.type =1 AND bins.id NOT IN (SELECT bins.id FROM bins JOIN bins_detections ON bins_detections.bins_id = bins.id JOIN detections ON bins_detections.detections_id = detections.id
+ JOIN soundfiles ON soundfiles.id = bins.soundfiles_id JOIN data_collection ON data_collection.id = soundfiles.data_collection_id WHERE bins.type =1 AND data_collection.name = 'BS09_AU_PM02-a'
+ AND detections.procedure =5 AND label IN (1,20))"
+
+missing_5_out = dbGet(missing_5)
+
+#looks like the bug is that I incorrectly filled in 0 and 600 as the soundfile size when I uploaded LM bin assumptions. oops!
+#easiest step is probably to delete and resubmit.
+
+#There are some other issues, related to soundfile naming- in cases where effort extended between different moorings, it sometimes
+#referred to the wrong deployment. Make sure before deleting these, that the data are also present in the correct mooring.
+
+#how to modify detections so they represent the right deployment?
+
+#first, identify the problem moorings. Based on the stats, looks like
+#1. AW12_AU_WT01
+#2. BS08_AU_PM05
+#3. AL19_AU_BS09
+#4. CX12_AU_WT02
+
+#steps:
+#1. pull submitted data (0 or 1)
+
+lm_data = "SELECT detections.*,data_collection.id,data_collection.name FROM detections JOIN soundfiles ON detections.start_file = soundfiles.id JOIN data_collection ON data_collection.id = soundfiles.data_collection_id WHERE signal_code = 3 AND procedure = 5 AND status = 1 AND label IN (0,1)"
+
+lm_data_out = dbGet(lm_data)
+
+#use above for inventory of moorings.
+
+#2. recalculate negative bins
+#3. delete lm procedure 5 (label 20)
+#4. resubmit.
+
+#alternate way forward-
+#1. pull all detections with 0 or 1 (along with mooring name)
+#2. for those which do not go with a mooring which was completed, locate their matching soundfile name and update the detection
+#to represent where it should be
+
+lm_wrong_moor = lm_data_out[which(lm_data_out$name %in% c("AW12_AU_WT01","BS08_AU_PM05","AL19_AU_BS09","CX12_AU_WT02")),]
+
+dup_sfs = dbGet("SELECT * from (SELECT soundfiles.id,soundfiles.name,data_collection.name,
+  COUNT(*) OVER(PARTITION BY soundfiles.name ORDER BY soundfiles.id asc rows BETWEEN unbounded preceding AND unbounded following) AS Row
+  FROM soundfiles JOIN data_collection ON soundfiles.data_collection_id = data_collection.id)
+  AS dups
+  WHERE dups.Row > 1")
+
+#test that the issues are all coming from duplicated file names:
+
+comp[which(comp$perc <1),"name"][which(comp[which(comp$perc <1),"name"] %in% unique(dup_sfs$name..3))]
+
+#looks like all the above, except BS09_AU_PM02-a , are cases where sf names are duplicated. To fix this one,
+#just need to submit remaining bins as 20s.
+
+fix_M2009 = data.frame(missing_5_out$seg_start,missing_5_out$seg_end,0,64,missing_5_out$soundfiles_id,missing_5_out$soundfiles_id,
+                       NA,"",5,20,3,2)
+
+cols =  dbGet("SELECT * FROM detections LIMIT 0")
+
+colnames(fix_M2009)=colnames(cols)[2:13]
+#dbAppendTable(con,'detections',fix_M2009)
+
+#did notice that some 20s are high_freq 512 in procedure 5- should be 64. change.
+
+change_data =dbGet("SELECT * FROM detections WHERE procedure = 5 AND label = 20 AND high_freq = 512")
+
+#fix these data, hard delete old ones, resubmit.
+new_data = change_data[,2:16]
+new_data$high_freq = 64
+
+#table_delete(con,'detections',change_data$id,hard_delete = TRUE)
+#dbAppendTable(con,'detections',new_data)
+
+#fixed!
+
+#determine which of the remaining should have been run, and which shouldn't have been run.
+
+is_run = c(comp[which(comp$perc <1),"name"])
+is_run_bool = c(F,F,)
+
+#now, can proceed assume affect moorings are due to sf duplicate issue.
+#in addition to missing data being possible, it may be true that there is double counted data as well when
+#both of the moorings have been run.
+#for instance, AL16_AU_UM01 is missing some data, but AL17_AU_UM01 is not- it may have duplicated counts.
+#this is true for (one missing data in brackets, duplicated perhaps not in brackets) [AL16_AU_UM01]-AL17_AU_UM01,IP16_AU_CH01-[IP17_AU_CH01], [CX14_AU_IC03]-CX13_AU_IC03
+#in order, confirmed problem sfs: AU-ALUM01-170508-000000.wav,AU-IPCH01-171006-000000.wav,AU-CXIC03-140926-100000.wav
+
+#doesn't look like it based on this
+test= dbGet("SELECT detections.*,soundfiles.name,data_collection.name FROM detections JOIN soundfiles ON detections.start_file = soundfiles.id JOIN data_collection ON data_collection.id = soundfiles.data_collection_id WHERE procedure = 5 AND soundfiles.name IN ('AU-ALUM01-170508-000000.wav','AU-IPCH01-171006-000000.wav','AU-CXIC03-140926-100000.wav')")
+
+#so need to handle this in chunks: 1, pull out the duplicated data and reassign, and 2, pull out the misassigned data and reassign.
+#need to make sure data are indeed duplicated. Test out each
+
+#get all of the detections from the moorings which both were run, to see if there are any duplicates.
+
+dups = dbGet(paste("SELECT * FROM detections JOIN soundfiles ON detections.start_file = soundfiles.id WHERE procedure = 5 AND soundfiles.name IN ('",paste(dup_sfs$name[which(dup_sfs$name..3 %in% c('AW13_AU_WT01','CX12_AU_WT02'))],sep="",collapse="','"),"')",sep=""))
+#doesn't appear as though any detections are duplicated.
+
+#test = dbGet("SELECT * FROM detections JOIN soundfiles ON detections.start_file = soundfiles.id
+#              JOIN data_collection ON soundfiles.data_collection_id = data_collection.id WHERE date_trunc('day', datetime) = '2017-05-09' AND procedure = 5 AND data_collection.location_code ='UM01'")
+
+#test = dbGet("SELECT * FROM detections JOIN soundfiles ON detections.start_file = soundfiles.id
+#              JOIN data_collection ON soundfiles.data_collection_id = data_collection.id WHERE date_trunc('day', datetime) = '2014-09-26' AND procedure = 5 AND data_collection.location_code ='IC03'")
+
+
+
+#looking at this single day- it appears that there is a mix of data from both sources, although it is non-overlapping.
+
+#so, what to do with this information. One thing I could do is pull out all of the dets from these, validate that they are in correct
+#mooring, and then resubmit negatives.
+
+View(test[which(test$label!=20),c("probability","name","name..24")])
+
+#for AU-ALUM01-170508-000000.wav: all detections in overlapping sections should be from 1st mooring (no overlap seen in detector outputs)
+#So what to do:
+#1. update all of these so that they are in 16 mooring.
+#find any 99 bins in 16 or 17: add bin negatives to them.
+
+#updatedets = dbGet("SELECT * FROM detections JOIN soundfiles ON detections.start_file = soundfiles.id
+#              JOIN data_collection ON soundfiles.data_collection_id = data_collection.id WHERE date_trunc('day', datetime) >= '2017-05-08' AND date_trunc('day', datetime) < '2017-07-20' AND procedure = 5 AND label !=20 AND data_collection.location_code ='UM01'")
+
+
+#2014-09-26
+
+#ignore those which have the correct mooring name
+updatedets = updatedets[-which(updatedets$name..24=="AL16_AU_UM01"),]
+
+#load the correct file names, using the ids
+sf_ids = dbGet(paste("SELECT id,name FROM soundfiles WHERE id IN (",paste(unique(c(updatedets$start_file,updatedets$end_file)),sep="",collapse = ","),")",sep=""))
+
+sf_ids2 = dbGet(paste("SELECT id,name FROM soundfiles WHERE name IN ('",paste(sf_ids$name,sep="",collapse = "','"),"')",sep=""))
+
+sf_ids2$id = as.integer(sf_ids2$id)
+
+sf_ids2_a = sf_ids2[which(sf_ids2$id<1000000),]
+sf_ids2_b = sf_ids2[which(sf_ids2$id>1000000),]
+
+sf_ids_3 = merge(sf_ids2_a,sf_ids2_b,by="name")
+
+#nice, now do replacement
+
+updatedets$start_file = as.integer(updatedets$start_file)
+updatedets$end_file = as.integer(updatedets$end_file)
+
+updatedets$start_file = sf_ids_3$id.y[match(updatedets$start_file,sf_ids_3$id.x)]
+updatedets$end_file[which(updatedets$end_file %in% sf_ids_3$id.x)] = sf_ids_3$id.y[match(updatedets$end_file[which(updatedets$end_file %in% sf_ids_3$id.x)],sf_ids_3$id.x)]
+
+#submit updated detections, them, hard delete old detections.
+
+updatedets_UM01 = data.frame(updatedets$start_time,updatedets$end_time,updatedets$low_freq,updatedets$high_freq,updatedets$start_file,updatedets$end_file,
+                             updatedets$probability,updatedets$comments,updatedets$procedure,updatedets$label,updatedets$signal_code,
+                             updatedets$strength,updatedets$modified,updatedets$analyst)
+colnames(updatedets_UM01) =colnames(cols)[2:15]
+
+#insert
+
+#dbAppendTable(con,'detections',updatedets_UM01)
+
+#now delete old ones
+#table_delete(con,'detections',updatedets$id,hard_delete = TRUE)
+
+#cool, now if it still has missing, just upload the missing bins as negatives.
+
+missing_5 = "SELECT * FROM bins JOIN soundfiles ON bins.soundfiles_id = soundfiles.id JOIN data_collection ON data_collection.id = soundfiles.data_collection_id
+ WHERE data_collection.name = 'AL16_AU_UM01' AND bins.type =1 AND bins.id NOT IN (SELECT bins.id FROM bins JOIN bins_detections ON bins_detections.bins_id = bins.id JOIN detections ON bins_detections.detections_id = detections.id
+ JOIN soundfiles ON soundfiles.id = bins.soundfiles_id JOIN data_collection ON data_collection.id = soundfiles.data_collection_id WHERE bins.type =1 AND data_collection.name = 'AL16_AU_UM01'
+ AND detections.procedure =5 AND label IN (1,20))"
+
+missing_5_out = dbGet(missing_5)
+
+#all files are 600 seconds, so create the dets with that assumption.
+
+prot_negs_AL16_AU_UM01 = data.frame(0,600,0,64,unique(missing_5_out$soundfiles_id),unique(missing_5_out$soundfiles_id),
+                                    NA,"",5,20,3,2)
+colnames(prot_negs_AL16_AU_UM01) = colnames(cols)[2:13]
+
+#dbAppendTable(con,'detections',prot_negs_AL16_AU_UM01)
+
+#alright, repeat the above steps for the other moorings.
+
+updatedets = dbGet("SELECT * FROM detections JOIN soundfiles ON detections.start_file = soundfiles.id
+              JOIN data_collection ON soundfiles.data_collection_id = data_collection.id WHERE date_trunc('day', datetime) = '2014-09-26' AND procedure = 5 AND label !=20 AND data_collection.location_code ='IC03'")
+
+#for ic3 - 14, there are no detections which need to be moved. So, I can just fill in the remaining bins.
+
+missing_5 = "SELECT * FROM bins JOIN soundfiles ON bins.soundfiles_id = soundfiles.id JOIN data_collection ON data_collection.id = soundfiles.data_collection_id
+ WHERE data_collection.name = 'CX14_AU_IC03' AND bins.type =1 AND bins.id NOT IN (SELECT bins.id FROM bins JOIN bins_detections ON bins_detections.bins_id = bins.id JOIN detections ON bins_detections.detections_id = detections.id
+ JOIN soundfiles ON soundfiles.id = bins.soundfiles_id JOIN data_collection ON data_collection.id = soundfiles.data_collection_id WHERE bins.type =1 AND data_collection.name = 'CX14_AU_IC03'
+ AND detections.procedure =5 AND label IN (1,20))"
+
+missing_5_out = dbGet(missing_5)
+
+prot_negs_CX14_AU_IC03 = data.frame(0,600,0,64,unique(missing_5_out$soundfiles_id),unique(missing_5_out$soundfiles_id),
+                                    NA,"",5,20,3,2)
+colnames(prot_negs_CX14_AU_IC03) = colnames(cols)[2:13]
+
+#dbAppendTable(con,'detections',prot_negs_CX14_AU_IC03)
+
+#in cases where both moorings have been run, how do I know which is the correct mooring for the data. Can I?
+#I could spot check detections against the detector outputs to see if it is correct.
+#In one case, a detection has a start file in one mooring and an end file in the other... :/
+
+
+#CX13_AU_WT02: looks like a case where I simply didn't run the detector on the whole data, so what are there are correct.
+
+#now do IP17_AU_CH01
+
+updatedets = dbGet("SELECT * FROM detections JOIN soundfiles ON detections.start_file = soundfiles.id
+              JOIN data_collection ON soundfiles.data_collection_id = data_collection.id WHERE date_trunc('day', datetime) = '2017-10-06' AND procedure = 5 AND label !=20 AND data_collection.location_code ='CH01'")
+
+#these both were detected in 17, but are currently in 16, so need to move them.
+
+sf_ids = dbGet(paste("SELECT id,name FROM soundfiles WHERE id IN (",paste(unique(c(updatedets$start_file,updatedets$end_file)),sep="",collapse = ","),")",sep=""))
+sf_ids2 = dbGet(paste("SELECT id,name FROM soundfiles WHERE name IN ('",paste(sf_ids$name,sep="",collapse = "','"),"')",sep=""))
+sf_ids2=sf_ids2[order(sf_ids2$name),]
+
+updatedets$start_file=c(2098995,2099016)
+updatedets$end_file=c(2098995,2099016)
+
+updatedets_IP17_AU_CH01 = data.frame(updatedets$start_time,updatedets$end_time,updatedets$low_freq,updatedets$high_freq,updatedets$start_file,updatedets$end_file,
+                             updatedets$probability,updatedets$comments,updatedets$procedure,updatedets$label,updatedets$signal_code,
+                             updatedets$strength,updatedets$modified,updatedets$analyst)
+colnames(updatedets_IP17_AU_CH01) =colnames(cols)[2:15]
+
+#dbAppendTable(con,'detections',updatedets_IP17_AU_CH01)
+
+#now delete old ones
+#table_delete(con,'detections',updatedets$id,hard_delete = TRUE)
+
+missing_5 = "SELECT * FROM bins JOIN soundfiles ON bins.soundfiles_id = soundfiles.id JOIN data_collection ON data_collection.id = soundfiles.data_collection_id
+ WHERE data_collection.name = 'IP17_AU_CH01' AND bins.type =1 AND bins.id NOT IN (SELECT bins.id FROM bins JOIN bins_detections ON bins_detections.bins_id = bins.id JOIN detections ON bins_detections.detections_id = detections.id
+ JOIN soundfiles ON soundfiles.id = bins.soundfiles_id JOIN data_collection ON data_collection.id = soundfiles.data_collection_id WHERE bins.type =1 AND data_collection.name = 'IP17_AU_CH01'
+ AND detections.procedure =5 AND label IN (1,20))"
+
+missing_5_out = dbGet(missing_5)
+
+#hmm, didn't remember if I checked that sfs are all duration 600. Not worth going back, at the end do a single check
+#and correct for any detections where end time > duration of file.
+prot_negs_IP17_AU_CH01 = data.frame(0,600,0,64,unique(missing_5_out$soundfiles_id),unique(missing_5_out$soundfiles_id),
+                                    NA,"",5,20,3,2)
+colnames(prot_negs_IP17_AU_CH01) = colnames(cols)[2:13]
+
+#dbAppendTable(con,'detections',prot_negs_IP17_AU_CH01)
+
+#now do CX12_AU_WT02
+
+updatedets = dbGet("SELECT * FROM detections JOIN soundfiles ON detections.start_file = soundfiles.id
+              JOIN data_collection ON soundfiles.data_collection_id = data_collection.id WHERE date_trunc('day', datetime) >= '2013-08-30' AND datetime <= '2013-10-02 14:10:00' AND procedure = 5 AND label !=20 AND data_collection.location_code ='WT02'")
+
+#these are all correct, don't need to move them. So, only thing I need to do is add the missing negatives.
+
+missing_5 = "SELECT * FROM bins JOIN soundfiles ON bins.soundfiles_id = soundfiles.id JOIN data_collection ON data_collection.id = soundfiles.data_collection_id
+ WHERE data_collection.name = 'CX12_AU_WT02' AND bins.type =1 AND bins.id NOT IN (SELECT bins.id FROM bins JOIN bins_detections ON bins_detections.bins_id = bins.id JOIN detections ON bins_detections.detections_id = detections.id
+ JOIN soundfiles ON soundfiles.id = bins.soundfiles_id JOIN data_collection ON data_collection.id = soundfiles.data_collection_id WHERE bins.type =1 AND data_collection.name = 'CX12_AU_WT02'
+ AND detections.procedure =5 AND label IN (1,20))"
+
+missing_5_out = dbGet(missing_5)
+
+prot_negs_CX12_AU_WT02 = data.frame(0,600,0,64,unique(missing_5_out$soundfiles_id),unique(missing_5_out$soundfiles_id),
+                                    NA,"",5,20,3,2)
+colnames(prot_negs_CX12_AU_WT02) = colnames(cols)[2:13]
+
+#dbAppendTable(con,'detections',prot_negs_CX12_AU_WT02)
+
+#last, need to take the remaining 3 moorings and switch all dets over. pseudo:
+#1.query all dets on not run moorings
+#2.query all sfs that match sf names of these, (sf2 tab)
+#3.remove from sf2 all matches to sf ids in table
+#4.match id to remaining ids in sf2 tab using name in detections
+#resubmit (probably, reinsert and then hard delete)
+
+wrong_dets= dbGet("SELECT * FROM detections JOIN soundfiles ON detections.start_file = soundfiles.id
+                  JOIN data_collection ON soundfiles.data_collection_id = data_collection.id
+                  WHERE procedure = 5 AND data_collection.name IN ('AW12_AU_WT01','BS08_AU_PM05','AL19_AU_BS09')")
+
+sf_ids = dbGet(paste("SELECT id,name FROM soundfiles WHERE id IN (",paste(unique(c(wrong_dets$start_file,wrong_dets$end_file)),sep="",collapse = ","),")",sep=""))
+
+sf_ids$id = as.integer(sf_ids$id)
+wrong_dets$start_file=as.integer(wrong_dets$start_file)
+wrong_dets$end_file=as.integer(wrong_dets$end_file)
+
+wrong_dets$start_file_name = sf_ids$name[match(wrong_dets$start_file,sf_ids$id)]
+wrong_dets$end_file_name = sf_ids$name[match(wrong_dets$end_file,sf_ids$id)]
+
+sf_ids2 = dbGet(paste("SELECT id,name FROM soundfiles WHERE name IN ('",paste(sf_ids$name,sep="",collapse = "','"),"')",sep=""))
+
+sf_ids2$id = as.integer(sf_ids2$id)
+
+sf_ids3 = sf_ids2[-which(sf_ids2$id %in% unique(c(wrong_dets$start_file,wrong_dets$end_file))),]
+
+wrong_dets$start_file2 = sf_ids3$id[match(wrong_dets$start_file_name,sf_ids3$name)]
+wrong_dets$end_file2 = sf_ids3$id[match(wrong_dets$start_file_name,sf_ids3$name)]
+
+#insert detections into correct mooring:
+
+updatedets_allwrong = data.frame(wrong_dets$start_time,wrong_dets$end_time,wrong_dets$low_freq,wrong_dets$high_freq,wrong_dets$start_file2,wrong_dets$end_file2,
+                                 wrong_dets$probability,"",wrong_dets$procedure,wrong_dets$label,wrong_dets$signal_code,
+                                 wrong_dets$strength,wrong_dets$modified,wrong_dets$analyst)
+colnames(updatedets_allwrong) =colnames(cols)[2:15]
+
+#dbAppendTable(con,'detections',updatedets_allwrong)
+
+#delete old data
+table_delete(con,'detections',wrong_dets$id,hard_delete = TRUE)
+
+#done! However, I should think about if there is potential for detections to have been double submitted, and continue to look out for it.
+#one final thing- want to now take a look at dets which exceed their sf size. But, do that next time.
+#last time, a lot of lm 5 procedure offended this.
+
+bug_dets = dbGet("SELECT * FROM detections JOIN soundfiles ON detections.end_file = soundfiles.id
+                 WHERE detections.status = 1 AND detections.end_time > soundfiles.duration")
+
+#get counts of all vers of detections- see if errs are more related to updates or original upload. looks like more related to og upload
+dbGet(paste("SELECT COUNT(*) FROM detections WHERE original_id IN (",paste(bug_dets$original_id,sep="",collapse=","),")",sep=""))
+
+#still some bugs. Split this into two camps- rounding errors (or mistaken duration) and miscalculated soundfiles.
+#for rounding errors, starttime should be within the duration, for miscalculated soundfiles, it should be outside of it.
+
+round_err = dbGet("SELECT * FROM detections JOIN soundfiles ON detections.end_file = soundfiles.id
+                 WHERE detections.end_time > soundfiles.duration AND detections.start_file = detections.end_file AND detections.start_time < soundfiles.duration")
+
+dbGet(paste("SELECT COUNT(*) FROM detections WHERE original_id IN (",paste(round_err$original_id,sep="",collapse=","),")",sep=""))
+
+#the plan: just truncate these to the end of the soundfile duration, then submit, then delete originals by original_id.
+
+round_err$end_time2 = round_err$end_time
+round_err$end_time = round_err$duration
+
+round_errdets = round_err[,c(2:18),] #all original values minus id
+
+#looks good- resubmit.
+
+#dbAppendTable(con,'detections',round_errdets)
+
+#wait, that does not work because now if I delete by original id I delete them all. Better, but riskier, to hard delete
+#all based on original id, and then resubmit just the dataset in memory.
+
+#this function is kindof sus. I should make it a lot safer
+#1. more atomic
+#2. use the information on sequence to predict the new ids, and then use those specific ids to delete.
+#table_delete(con,'detections',as.integer(round_err$id),hard_delete = TRUE)
+
+#fixed! I think before I go further, I should really try to fix table_delete so I can actually use it predictably without
+#breaking stuff.
+
+
+
+
+
+
+#what about - is there a query which can provide a graphical look at moorings which have or have not been run for a procedure?
+
+

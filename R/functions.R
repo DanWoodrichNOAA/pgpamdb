@@ -376,6 +376,7 @@ detx_pgpamdb_det_rough_convert<-function(conn,detx_data,procedure,strength,depna
 #' @param dataset The R object to update, all columns must have equivalents in database table. Defaults to column names.
 #' @param data_types The postgresql target column data types. Must be provided and explicit.
 #' @param interpret_as Ordered vector which maps dataset columns to database (including join syntax, if required) columns
+#' @param return_anything If the output df is different sized than the input, return it anyway, otherwise return error
 #' @return a data frame corresponding to returned columns specified in 'from_db_query' argument
 #' @export
 table_dataset_lookup<-function(conn,from_db_query,dataset,data_types,interpret_as=NULL,return_anything=FALSE){
@@ -826,6 +827,58 @@ table_delete <-function(conn,tablename,ids,idname = 'id',hard_delete=FALSE){
 
 }
 
+table_delete2 <-function(conn,tablename,ids,idname = 'id',hard_delete=FALSE){
+
+  dbBegin(conn)
+
+  try({
+
+  if(length(ids)>1){
+    #query = paste("DELETE FROM ",tablename," WHERE ",idname," =ANY(Array [",paste(ids,collapse=",",sep=""),"])",sep="")
+
+    query = paste("DELETE FROM ",tablename," WHERE ",idname," IN (",paste(ids,collapse=",",sep=""),")",sep="")
+  }else{
+    query = paste("DELETE FROM ",tablename," WHERE ",idname," IN",paste("(",ids,")",sep=""))
+
+  }
+
+  if(tablename =="detections" & hard_delete==TRUE){
+
+    tablength = length(ids)
+
+    start_curr = dbFetch(dbSendQuery("SELECT currval('detections_id_seq')"))
+
+    #execute query first time here.
+    dbExecute(conn,query)
+
+    end_curr = dbFetch(dbSendQuery("SELECT currval('detections_id_seq')"))
+
+    #compare lengths of start and end of sequence. If they are consistent, then we can assume the new id values.
+    if(tablength!= lenght(start_curr:end_curr)){
+      stop("Cannot predict ids after deletion- operation terminated")
+    }
+
+    #instead of
+
+    if(length(ids)>1){
+      #query = paste("DELETE FROM ",tablename," WHERE original_id =ANY(Array [",paste(ids,collapse=",",sep=""),"])",sep="")
+      query = paste("DELETE FROM ",tablename," WHERE original_id IN (",paste(ids,collapse=",",sep=""),")",sep="")
+    }else{
+      query = paste("DELETE FROM ",tablename," WHERE original_id IN",paste("(",ids,")",sep=""))
+
+    }
+
+  }
+
+  })
+
+  dbCommit(conn)
+
+  return(out)
+
+}
+
+
 #convenience functions.
 
 #' Look up database table by named column values and return id
@@ -1051,18 +1104,27 @@ detx_to_db <- function(conn,dataset){
 
 }
 
-# return a plot of a bin label distribution in our data, by % bins in month.
+#' Plot all instances of a label code
+#'
+#' Plot all instances of a label code. Shows spread of label across data regardless of analysis. Gray signifies data present, no
+#' effort, boxes around tile indicate at least one positive presence instance.
+#' @param conn The database connection
+#' @param bin_label bin label code, ie 'RW'
+#' @param inst_source AFSC if you don't want to include other lab data in the db
+#' @param plot_sds standard deviations for the color scale. Smaller = more similar colors, larger = more dynamic colors.
+#' @param bin_type integer id for bin type- 1 = LOW, 2 = REG, 3 = SHI. Affects n but shouldn't affect plot too much.
+#' @return ggplot object
+#' @export
+#'
+bin_label_explore<-function(conn,bin_label,inst_source='AFSC',plot_sds = 4,bin_type=1){
 
-#todo: instead of querying by source= afsc, should query by location codes in which source is afsc!
-#that way, will correctly grab older moorings which we aquired.
-bin_label_explore<-function(conn,bin_label,inst_source='AFSC',plot_sds = 4){
-
+  bt_str = c("LOW","REG","SHI","CUSTOM")[bin_type]
   #bin_label= 'fw' #temp
   #inst_source = "AFSC"
 
   query = paste("SELECT ",bin_label,",count(*),date_trunc('month', soundfiles.datetime) AS dt_,data_collection.name,data_collection.location_code,data_collection.latitude
                 FROM bin_label_wide JOIN bins ON bins.id = bin_label_wide.id JOIN soundfiles ON bins.soundfiles_id = soundfiles.id JOIN data_collection ON data_collection.id = soundfiles.data_collection_id
-                WHERE bins.type = 1 AND data_collection.institution_source = '",inst_source,"' GROUP BY ",bin_label,",dt_,data_collection.name,data_collection.location_code,data_collection.latitude",sep="")
+                WHERE bins.type = ",bin_type," AND data_collection.institution_source = '",inst_source,"' GROUP BY ",bin_label,",dt_,data_collection.name,data_collection.location_code,data_collection.latitude",sep="")
 
   output = dbFetch(dbSendQuery(conn,gsub("[\r\n]", "", query)))
 
@@ -1131,27 +1193,41 @@ bin_label_explore<-function(conn,bin_label,inst_source='AFSC',plot_sds = 4){
 
   output_mod_agg[which(output_mod_agg$count_adj>scale_max),"count_adj"]=scale_max
 
-  base_map =ggplot(output_mod_agg, aes(dt_, location_code)) +
+  colnames(output_mod_agg)[which(colnames(output_mod_agg)=="dt_")]="mm_yy"
+
+  base_map =ggplot(output_mod_agg, aes(mm_yy, location_code)) +
     geom_tile(aes(fill = count_adj), color = "gray") +
     geom_tile(data = output_mod_agg[which(output_mod_agg$count>0 & output_mod_agg$common_label==1),], color = "black",fill=NA) +
     scale_fill_gradient2(limits=c(0, scale_max), low = "white", high= "purple",
                          midpoint =  scale_midpoint) +
     #scale_x_discrete(expand = c(0,0)) +
-    scale_x_datetime(date_breaks = "6 months" , date_labels = "%m-%y") +
-    ggtitle(expression(atop(bold("Test")))) +
+    scale_x_datetime(date_breaks = "6 months" , date_labels = "%m-%y",expand=c(0,0)) +
+    ggtitle(paste(bin_label,"monthly",bt_str,"bin % presence")) +
+    theme_bw() +
     theme(legend.title = element_text(size=12),
           legend.text = element_text(size=12)) +
     theme(axis.text = element_text(size=12),
-          axis.title.y = element_blank(),
-          axis.title.x = element_text(size = 12)) +
+          axis.title.y = element_blank()) +
     theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
-    labs(fill = "count_adj")
+    labs(fill = "% presence")
+
 
   return(base_map)
 
 }
 
-# add a layer, usually gt, to the bin label plot
+#' Add a layer to bin label explore plot
+#'
+#' Add a layer to a bin label explore plot. No easy way to include legend, use for quick comparisons.
+#' @param conn The database connection
+#' @param signal_code integer id for signal, ie 1 (RW), 2 (GS). see db
+#' @param procedure integer id for procedure. see db
+#' @param color color. doesn't scale with counts, just presence.
+#' @param fgnames optional fgs to consider.
+#' @param inst_source AFSC if you don't want to include other lab data in the db
+#' @return ggplot layer to + to bin label explore ggplot object
+#' @export
+#'
 add_layer_ble<-function(conn,signal_code,procedure,color,fgnames=c(),inst_source='AFSC'){
 
   if(length(fgnames)>0){
@@ -1163,13 +1239,13 @@ add_layer_ble<-function(conn,signal_code,procedure,color,fgnames=c(),inst_source
     add_fgnames = ""
   }
 
-  query_layer = paste("SELECT DISTINCT date_trunc('month', soundfiles.datetime) AS dt_,data_collection.name,data_collection.location_code,data_collection.latitude
+  query_layer = paste("SELECT DISTINCT date_trunc('month', soundfiles.datetime) AS mm_yy,data_collection.name,data_collection.location_code,data_collection.latitude
   FROM detections JOIN soundfiles ON detections.start_file = soundfiles.id JOIN data_collection ON data_collection.id = soundfiles.data_collection_id ",fgnames_join,"
-  WHERE detections.signal_code = ",signal_code," AND detections.procedure = ",procedure," AND data_collection.institution_source = '",inst_source,"' ",add_fgnames," GROUP BY dt_,data_collection.name,data_collection.location_code,data_collection.latitude",sep="")
+  WHERE detections.signal_code = ",signal_code," AND detections.procedure = ",procedure," AND data_collection.institution_source = '",inst_source,"' ",add_fgnames," GROUP BY mm_yy,data_collection.name,data_collection.location_code,data_collection.latitude",sep="")
 
   query_layer_out = dbFetch(dbSendQuery(conn,gsub("[\r\n]", "", query_layer)))
 
-  return(geom_point(data=query_layer_out, aes(x=dt_, y=location_code,z=NULL), fill = color, colour = 'black',pch=21,size =3))
+  return(geom_point(data=query_layer_out, aes(x=mm_yy, y=location_code,z=NULL), fill = color, colour = 'black',pch=21,size =3))
 
 }
 
@@ -1178,6 +1254,6 @@ add_layer_ble<-function(conn,signal_code,procedure,color,fgnames=c(),inst_source
 #' @import foreach
 #' @import tuneR
 #' @import utils
-#' @import ggplot
+#' @import ggplot2
 NULL
 

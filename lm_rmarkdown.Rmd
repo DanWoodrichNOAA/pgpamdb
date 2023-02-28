@@ -1,20 +1,23 @@
 ---
-title: "LM2gen_training"
+title: "Low moan detector 2nd generation: data discovery, training, and evaluation"
 author: "Dan woodrich"
 date: "2/7/2023"
 output: html_document
 ---
 
-#think a little about the ggplot theme: https://benjaminlouis-stat.fr/en/blog/2020-05-21-astuces-ggplot-rmarkdown/
+
 
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE,fig.width = 12, fig.height = 10)
+knitr::opts_chunk$set(warning = FALSE, message = FALSE) 
+library(imager)
+#think a little about the ggplot theme: https://benjaminlouis-stat.fr/en/blog/2020-05-21-astuces-ggplot-rmarkdown/
 ```
 
 ## What is this document? 
 
 This is a demonstration of the process to utilize database data and detector outputs for use in data analysis and detector retraining. I am using a tool called RMarkdown, which allows for demonstration of code and plots in a document you can 
-read in your web browser. A similar tool is an online notebook, which lets you run and modify code on the fly, but since this document relies on a personal database connection it should be view only. 
+read in your web browser or as a PDF. A similar tool is an online notebook, which lets you run and modify code on the fly, but since this document relies on a personal database connection it should be view only. 
 
 The demonstration features 
 1. Demonstration of database features and built in capabilities
@@ -27,15 +30,13 @@ The demonstration features
 Below are some libraries which we will call on, as well as an R file which represents the functions from 'pgpamdb', which is an R package I am developing to add value to our database. 
 
 ```{r}
-#library(pgpamdb) 
-library(RPostgres)
-library(foreach)
-library(tuneR)
+#install from here: 
+#install.packages("//nmfs/akc-nmml/CAEP/Acoustics/Matlab Code/Other code/R/pgpamdb/pgpamdb_0.1.11.tar.gz", source = TRUE, #repos=NULL)
+
+library(pgpamdb) #our custom package for routines specific to our database
+library(RPostgres) #universal library to connect R session to postgres database
 library(ggplot2)
-library(imager)
-
-
-source("./R/functions.R") #functions from in development R package pgpamdb
+library(scales)
 
 #define a convenince function, which is not included in the pgpamdb package
 dbGet <-function(x){
@@ -47,22 +48,24 @@ dbGet <-function(x){
 ## Connecting to the database. 
 
 The database connection relies on connection to the internet, the NOAA VPN, and several connection variables and keys which 
-we will provide. 
+we will provide. These are specific to the user, and so are not listed here. 
 
 ```{r}
-source("./etc/paths.R") #This populates connection variables for my personal user account to the database
-con=pamdbConnect("poc_v2",keyscript,clientkey,clientcert)
+#This populates connection variables for my personal user account to the database. 
+source("./etc/paths.R") 
+#Takes the connection variables now in the R session, and uses them to connect to the database with a custom function
+con=pgpamdb::pamdbConnect("poc_v2",keyscript,clientkey,clientcert)
 ```
 
 ## What has happened prior to this document? 
 
-The low moan detector has been run on a number of AFSC mooring deployments. The reviewed detections from the low moan deployment have been loaded to the database. In addition, I uploaded "assumed negative" detections on the scale of LOW bins (300s). This means that if a LOW bin does not contain any low moan detections which were marked yes by either Cole or I, the time boundaries of this bin will be submitted as a 'protocol negative', meaning a negative which has not been confirmed directly by an analyst. This is opposed to a true negative, which has been confirmed by an analyst to not contain the signal.
+The low moan detector has been run on a number of AFSC mooring deployments. The reviewed detections from the low moan deployment have been loaded to the database as either true positive or false positive detections. In addition, I uploaded "assumed negative" detections on the timescale of LOW bins (300s). Although each returned detection was reviewed, absence is implied even if no detections were returned for a given segment of time. The assumed negative detections are uploaded as a 'protocol negative' type. Entering the assumed negatives as an explicit detection enables us to query from these sections and allows the database to assess assumption conflicts (for example, if there is an assumed negative detection in the same time bin as a verified low moan from another analysis).
 
-In fact, let's take a glance at these codes: we will use a SQL query to ask the database for the names, and shorthand and integer codes of the labels on the database. 
+In fact, let's take a glance at the different presence codes: we will use a SQL query to ask the database for the names, and shorthand and integer codes of the labels on the database. 
 
 ```{r}
 db_labels_explained = dbGet("SELECT name,alias AS shorthand,id FROM label_codes")
-print(db_labels_explained[order(db_labels_explained$id),])
+knitr::kable(db_labels_explained[order(db_labels_explained$id),],row.names = FALSE)
 ```
 
 In addition to the low moan detector deployment, two accessory analyses were completed and loaded to the database. The first was Cole Watson's review of 'positive' data: data segments containing a verified low moan were presented to Cole for comprehensive boxing. The second was a selection of random data: cole reviewed data selected randomly from each month from 2012 to 2019 over Bering sea moorings. 
@@ -70,8 +73,11 @@ In addition to the low moan detector deployment, two accessory analyses were com
 These additional data sources are valuable additions to a detector retraining.
 
 ```{r}
-analysis_procedure_names= dbGet("SELECT analyses.name AS analysis_name ,procedures.name AS procedure_name,procedures.id AS procedures_id FROM analyses JOIN procedures ON procedures.analysis_id = analyses.id WHERE analyses.id IN (3,6)")
-print(analysis_procedure_names)
+#Pull out the analyses names, the procedure names, and the procedure ids. This is a high level registry of the low moan analysis effort thus far. 
+analysis_procedure_names= dbGet("SELECT analyses.name AS analysis_name ,procedures.name AS procedure_name,procedures.id AS procedures_id 
+                                FROM analyses JOIN procedures ON procedures.analysis_id = analyses.id 
+                                WHERE analyses.name IN ('Low moan detection','Low moan accessory study')")
+knitr::kable(analysis_procedure_names)
 ```
 
 ## How to inventory our data? 
@@ -80,21 +86,22 @@ Before we can start selecting training data, we first need a way to visualize wh
 
 When data are loaded into the database, it automatically updates a table which can be queried to understand the presence and absence of the given signal. Let's see how low moans effort and presence are distributed across our full dataset. 
 
-Let's use a convenience function from our R package to create a panoptic view of low moans in our data. This creates a heatmap on the month resolution. Gray tiles indicate data exists and is not analyzed, tiles with black outline indicate that at least one bin contains at least one low moan, and the color scale indicates the % of bins in the month where low moans were present.  
+Let's use a convenience function from our R package to create a panoptic view of low moans in our data. This creates a heatmap on the month resolution. Gray tiles indicate data exists and is not analyzed, tiles with a black outline indicate that at least one bin contains at least one low moan, and the color scale indicates the % of bins in the month where low moans were present.  
 
 ```{r}
-lm_map = bin_label_explore(con,'lm',plot_sds = 2) #plot_sds is standard deviations for the color scale, defaults to 4
+#this is a function which calls queries, some data processing, and ggplot in a set routine. The mooring names are pulled from the database and are ordered by latitude. 
+lm_map = pgpamdb::bin_label_explore(con,'lm',plot_sds = 2) #plot_sds is standard deviations for the color scale, defaults to 4
 plot(lm_map)
 ```
 
 ## Where was the initial training from? 
 
-The original LM detector training data was identified by deploying a Raven Band-Limited-Energy-Detector over a few moorings over a few moorings deployments in the area near where the call was originally discovered (SEBS). The calls and "implied negative" space between the calls were used for detector training. 
+The original LM detector training data was identified by deploying a Raven Band-Limited-Energy-Detector over a few moorings over a few moorings deployments in the area near where the call was originally discovered (Southeastern Bering). The calls and "implied negative" space between the calls were used for detector training. 
 
-We can use another function in the pgpamdb package to add a layer onto the heatmap representing sampling presence in a given month. 
+We can use another function in the pgpamdb package to add a layer onto the heatmap representing this initial sampling presence in a given month. 
 
 ```{r}
-lm_map_w_oggt = lm_map + add_layer_ble(con,3,10,'orange',c("lm2gen_og_train"))
+lm_map_w_oggt = lm_map + pgpamdb::add_layer_ble(con,3,10,'orange',c("lm2gen_og_train"))
 plot(lm_map_w_oggt)
 ```
 
@@ -104,21 +111,54 @@ As discovery of these initial calls were opportunistic, we can see that this a l
 
 Knowing the utility for future training, the accessory studies of the "Low moan negative review" and "Low moan positive review" were annotated with an implied negative assumption. 
 
-These studies both sampled over a wide spatial and temporal range, but differ in what they provide to retraining. The Low moan positive review's protocol focused on effort where low moans were detected and verified, meaning that it is rich in true positive detections vs. time. The negative review did not use detector outputs, so the stratified sample covered a wide range of space, time and conditions, and any low moans encountered in this review were randomly identified and not biased in any way towards detector performance. 
+These studies both sampled over a wide spatial and temporal range, but differ in what they provide to retraining. The Low moan positive review's protocol focused on effort where low moans were detected and verified, meaning that it is rich in true positive detections while limited in total effort time. The negative review did not use detector outputs, so the stratified sample covered a wide range of space, time and conditions, and any low moans encountered in this review were randomly identified and not biased in any way towards detector performance. This sample is rich in time, while poor in detections. Roughly speaking, the positive study provides value to the retraining process for the positives it contributes, while the random study provides value in contribution of negative instances. 
 
-Let's compare some initial results from these studies. First- what is the temporal distribution of verified low moans, comparing the detector-biased positive review vs the random review?
+Let's compare these attributes using SQL queries to the database.
+
+```{r}
+#effort time by study
+effort_count = dbGet("SELECT SUM(seg_end-seg_start)/3600 AS effort_hours,effort.name 
+                     FROM bins JOIN bins_effort ON bins.id = bins_effort.bins_id JOIN effort ON bins_effort.effort_id = effort.id
+                     WHERE effort.name IN ('LMyesSample_1','oneHRonePerc') GROUP BY effort.name")
+
+effort_count$effort_hours = as.integer(effort_count$effort_hours)
+
+effort_count$name[which(effort_count$name=="LMyesSample_1")]= 'positive'
+effort_count$name[which(effort_count$name=="oneHRonePerc")]= 'random'
+
+#count of total lm's boxed by cole in each study
+lms_count = dbGet("SELECT COUNT(*),procedures.name FROM detections JOIN procedures ON detections.procedure = procedures.id 
+                  WHERE procedures.name IN ('Low moan random review','Low moan positive review') AND label =1 GROUP BY procedures.name")
+
+#create table
+studies_table = data.frame(lms_count$name,effort_count$effort_hours,lms_count$count)
+colnames(studies_table) = c("study name","effort hours","total low moans")
+
+knitr::kable(studies_table)
+
+```
+
+Let's take a quick look at trends comparison to better understand these studies. What is the temporal distribution of verified low moans, comparing the detector-biased positive review vs the random review?
 
 ```{r}
 
-datetotals = dbGet("SELECT EXTRACT(MONTH FROM date_trunc('month', soundfiles.datetime)) AS month,procedure,COUNT(*) FROM detections JOIN soundfiles ON detections.start_file = soundfiles.id WHERE detections.procedure IN (12,13) AND label = 1 GROUP BY month,procedure")
+datetotals = dbGet("SELECT EXTRACT(MONTH FROM date_trunc('month', soundfiles.datetime)) AS month,procedure,COUNT(*) 
+                   FROM detections JOIN soundfiles ON detections.start_file = soundfiles.id 
+                   WHERE detections.procedure IN (12,13) AND label = 1 GROUP BY month,procedure")
 
+#data formatting for prettier plotting
 datetotals$procedure = as.character(datetotals$procedure)
 datetotals[which(datetotals$procedure==12),"procedure"]= "random"
 datetotals[which(datetotals$procedure==13),"procedure"]= "positive"
-
 datetotals$count = as.integer(datetotals$count)
+
 datetotals$procedure = as.factor(datetotals$procedure)
 datetotals$month = factor(month.abb[datetotals$month],levels = month.abb)
+
+#add a 0 not present in the query
+missingmonth = data.frame('Oct','random',0)
+colnames(missingmonth) = colnames(datetotals)
+datetotals = rbind(datetotals,missingmonth) 
 
 seasoncompare = ggplot(datetotals, aes(month, count, fill=procedure))+ geom_bar(stat = "identity", position = 'dodge')
 plot(seasoncompare)
@@ -126,44 +166,25 @@ plot(seasoncompare)
 
 We see there is fairly good agreement between the two sampling methods on when low moans occur, with some caveat of the small sample size of the confirmed low moans in the random sample. 
 
-We can also compare these samples by total time: this gives some context to the previous barchart, as well as should indicate to us how much 'negative' data (data without low moans) is available to training. 
-
-```{r}
-effort_count = dbGet("SELECT SUM(seg_end-seg_start)/3600 AS effort_hours,effort.name FROM bins JOIN bins_effort ON bins.id = bins_effort.bins_id JOIN effort ON bins_effort.effort_id = effort.id WHERE effort.name IN ('LMyesSample_1','oneHRonePerc') GROUP BY effort.name")
-
-effort_count$effort_hours = as.integer(effort_count$effort_hours)
-
-effort_count$name[which(effort_count$name=="LMyesSample_1")]= 'positive'
-effort_count$name[which(effort_count$name=="oneHRonePerc")]= 'random'
-
-effortcompare = ggplot(effort_count, aes(x=name,y=effort_hours,fill = name))+ geom_bar(stat="identity")
-plot(effortcompare)
-
-```
-
-So roughly speaking, the positive sample provides value to the retraining process for the positives it contributes, while the ranom sample provides value in contribution of negative instances. 
-
-## What is the spatiotemporal distribution of the accessory studes? What spatiotemporal and procedural gaps remain? 
+Another question we might ask about these studies is: what is the spatiotemporal distribution of the accessory studes? And what spatiotemporal and procedural gaps remain? 
 
 Let's look at each of these samples on our spatiotemporal map, starting with the negative sample. 
 
 ```{r}
-lm_map_neg_samp = lm_map + add_layer_ble(con,3,12,'blue',c("oneHRonePerc"))
+lm_map_neg_samp = lm_map + pgpamdb::add_layer_ble(con,3,12,'blue',c("oneHRonePerc"))
 plot(lm_map_neg_samp)
 ```
 
-By procedure, the sample was from Bering moorings M2, M3, BS3, BS4, BS2, M5, BS1, and M8. It was stratified to sample from each month to ensure even coverage, and we can observe that it succeeded in achieving wide spatiotemporal coverage in the Bering Sea. 
+By procedure, the sample was from Bering moorings M2, M4, BS3, BS4, BS2, M5, BS1, and M8. It was stratified to sample from each month to ensure even coverage, and we can observe that it succeeded in achieving wide spatiotemporal coverage in the Bering Sea. 
 
 Let's take a look at the positive sample. 
 
 ```{r}
-lm_map_pos_samp = lm_map_neg_samp + add_layer_ble(con,3,13,'red',c("LMyesSample_1"))
+lm_map_pos_samp = lm_map_neg_samp + pgpamdb::add_layer_ble(con,3,13,'red',c("LMyesSample_1"))
 plot(lm_map_pos_samp)
 ```
 
-This covers confirmed low moans, and so it clusters around where low moans were detected in higher number, which are primarily these same mooring deployments. (-Note to self- look back at sampling and see if we hard limited it to bering)
-
-While this sample didn't contribute any wider spatiotemporal coverage, it contributed more data where low moans were most concentrated from the 1st detector deployment. 
+This sample covers where we had previously confirmed the presence of low moans, and so it clusters around where low moans were detected in higher number. 
 
 All together, we could interpret these studies as good contributions for Bering Sea data to the 2nd generation model. From a spatial standpoint, we clearly lack training data from the higher latitudes, despite seeing verified low moans in these locations. 
 
@@ -172,7 +193,7 @@ All together, we could interpret these studies as good contributions for Bering 
 As we can see, there is a considerable amount of potential overlap between the original, positive review and random review data sources. 
 
 ```{r}
-lm_map_all3_samp = lm_map + add_layer_ble(con,3,12,'blue',c("oneHRonePerc")) + add_layer_ble(con,3,13,'red',c("LMyesSample_1")) + add_layer_ble(con,3,10,'orange',c("lm2gen_og_train")) 
+lm_map_all3_samp = lm_map + pgpamdb::add_layer_ble(con,3,12,'blue',c("oneHRonePerc")) + pgpamdb::add_layer_ble(con,3,13,'red',c("LMyesSample_1")) + pgpamdb::add_layer_ble(con,3,10,'orange',c("lm2gen_og_train")) 
 plot(lm_map_all3_samp)
 ```
 
@@ -180,18 +201,20 @@ To turn the existing data sources into suitable training samples, and to create 
 
 The database contains a table of 'bins', which are png-sized (300s,225s,90s) splits of our data which compose effort for use with different samples. To avoid overlap, we have to identify the duplicate bins between samples, and remove duplicates to create a special training sample. 
 
-It does not matter which sample we remove the duplicates from, since the data will be equally considered by the training process.
+It does not matter which sample we remove the duplicates from, since the data will be equally considered by the training process. If boxes from multiple studies are refer to the same call between samples, the training process will take the union of the detection pool to not double count individual calls. 
 
 First, we select the bin ids (unique identifier) which compose the original training. 
 ```{r}
-lm2gen_og_train = dbGet("SELECT bins_id FROM bins_effort JOIN effort ON bins_effort.effort_id = effort.id WHERE effort.name = 'lm2gen_og_train'")
+lm2gen_og_train = dbGet("SELECT bins_id FROM bins_effort JOIN effort ON bins_effort.effort_id = effort.id 
+                        WHERE effort.name = 'lm2gen_og_train'")
 
 lm2gen_og_train = as.integer(lm2gen_og_train$bins_id)
 ```
 
 Then, we load in the positive review sample
 ```{r}
-lm2gen_train_pos_set_no_ovlp = dbGet("SELECT bins_id FROM bins_effort JOIN effort ON bins_effort.effort_id = effort.id WHERE effort.name = 'LMyesSample_1'") 
+lm2gen_train_pos_set_no_ovlp = dbGet("SELECT bins_id FROM bins_effort JOIN effort ON bins_effort.effort_id = effort.id 
+                                     WHERE effort.name = 'LMyesSample_1'") 
 
 lm2gen_train_pos_set_no_ovlp = as.integer(lm2gen_train_pos_set_no_ovlp$bins_id)
 ```
@@ -203,7 +226,8 @@ lm2gen_train_pos_set_no_ovlp = lm2gen_train_pos_set_no_ovlp[-which(lm2gen_train_
 
 Similarly, for the random review sample, we exclude duplicate bins from both the original and positive review samples. 
 ```{r}
-lm2gen_train_rand_set_no_ovlp = dbGet("SELECT bins_id FROM bins_effort JOIN effort ON bins_effort.effort_id = effort.id WHERE effort.name = 'oneHRonePerc'") 
+lm2gen_train_rand_set_no_ovlp = dbGet("SELECT bins_id FROM bins_effort JOIN effort ON bins_effort.effort_id = effort.id 
+                                      WHERE effort.name = 'oneHRonePerc'") 
 
 lm2gen_train_rand_set_no_ovlp = as.integer(lm2gen_train_rand_set_no_ovlp$bins_id)
 
@@ -212,100 +236,44 @@ lm2gen_train_rand_set_no_ovlp = lm2gen_train_rand_set_no_ovlp[-which(lm2gen_trai
 
 ## Creating hard negative sample
 
-Common good practice for model training is to include 'hard negatives' - high probility detections which were found to be false positives. These detections help the model handle the tough distinctions between the signal and similar noise, which can improve performance considerably. 
+Common good practice for model training is to include 'hard negatives' - false positives with high probability. These detections help the model handle the tough distinctions between the signal and similar noise, which can improve performance considerably. Along with the next sample we will introduce, although these cover data which were run by the detector, they will be reviewed with the 'implied negative' assumption which does not apply to detector outputs but is necessary for retraining. 
 
 To create our hard negative sample, we first have to decide: 
 1. How much data do we want? 
-2. What probability cutoff constitutes a hard negative? Do we want to sample within a wider range of probabilities or choose a higher cutoff? 
+2. What probability cutoff constitutes a hard negative? 
+3. Do we want to sample within a wider range of probabilities or choose a higher cutoff? 
 
-How much data would we like for our sample? At a minumum, it should be in the neighborhood of the size of our other samples. However, since the other samples were larger and more dedicated efforts, these samples are ok to be comparitively smaller. So, perhaps 1/2 the size of the smallest sample would be a good floor, so something like 650 300s bins (~50 hours). If we are struggling to acheive good results in training, we could sample from within the larger segments as well to promote the hard negatives. 
-
-
-```{r}
-effort_count = dbGet("SELECT COUNT(*),effort.name FROM bins JOIN bins_effort ON bins.id = bins_effort.bins_id JOIN effort ON bins_effort.effort_id = effort.id WHERE effort.name IN ('LMyesSample_1','oneHRonePerc','lm2gen_og_train') GROUP BY effort.name")
-
-effort_count$count = as.integer(effort_count$count)
-
-effort_count$name[which(effort_count$name=="LMyesSample_1")]= 'positive'
-effort_count$name[which(effort_count$name=="lm2gen_og_train")]= 'original'
-
-effortcompare = ggplot(effort_count, aes(x=name,y=count,fill = name))+ geom_bar(stat="identity")
-plot(effortcompare)
-
-```
-
+How much data would we like for our sample? At a minumum, it should be in the neighborhood of the size of our other samples. However, since the other samples were larger and more dedicated efforts, these samples will be comparitively smaller due to time restrictions. So, perhaps 1/2 the size of the smallest sample would be a good floor to be a relevant contributor to the training process, so something like 650 300s bins (~50 hours). If we are struggling to acheive good results in training, we could sample from within the larger segments as well to promote the hard negatives. 
 
 Now that we know the amount of data we want, we can decide how we would like to define our hard negatives. There are two approaches we could take: take a cutoff to match the amount of data we want, or take a cutoff which matches the range of what we consider a hard negative, and sample from within that range. 
-
-Say this is our distribution: 
-```{r}
-
-data_ex = rnorm(10000)
-hist(data_ex)
-
-```
-
-
-If we wanted to take a certain # of high values, say 50, we could set a particular cutoff. 
-
-```{r}
-samples = 50
-cutoff = 2.55
-
-data_samp = data_ex[which(data_ex>cutoff)]
-length(data_samp)
-hist(data_ex)
-abline(v = cutoff,col ="red")
-
-print(mean(data_samp))
-
-abline(v = mean(data_samp),col ="blue")
-
-```
-Or, we could instead take a lower cutoff, and sample it further so it becomes 50. 
-
-```{r}
-samples = 50
-cutoff = 2.25
-data_samp = data_ex[which(data_ex>cutoff)]
-
-#further sample
-
-data_samp = data_samp[which(sample(length(data_samp))>length(data_samp)*2/3)]
-
-length(data_samp)
-
-hist(data_ex)
-abline(v = cutoff,col ="red")
-
-print(mean(data_samp))
-
-abline(v = mean(data_samp),col ="blue")
-
-```
 
 Let's take a look at how the probabilities distribute in our real data: 
 
 ```{r}
 
-lm_allprobs = dbGet("SELECT probability,label FROM detections WHERE procedure = 5 AND probability IS NOT NULL")
+lm_allprobs = dbGet("SELECT probability,label FROM detections 
+                    JOIN procedures ON detections.procedure = procedures.id 
+                    WHERE procedures.name = 'LM INSTINCT detector first deployment' AND probability IS NOT NULL")
 
 #view relationship
 
+#histogram (blue) of false positive probabilities
 hist(lm_allprobs$probability[which(lm_allprobs$label==0)],col=rgb(0,0,1,1/2),xlab = "probability",main= NULL)
+#histogram (red) of true positive probabilities
 hist(lm_allprobs$probability[which(lm_allprobs$label==1)],col=rgb(1,0,0,1/2),add=TRUE)
 
 ```
 
-Based on this graphic, I like the cutoff of .95. Reason being, is that the true positive rate starts to accelerate at this point as probability increases, which makes the negatives even more notable. Personally, I also find in my experience that ultra-high hard negatives contain less variety in the signals they represent, often coming from only one or two reoccuring patterns. 
+Based on this graphic, I like the cutoff of .95 - around this probability the positives start to become more frequent in number to the negatives, making the negatives particularly eggregious. I personally like choosing a lower cutoff for hard negatives and sampling within this pool than choosing all instances in an ultra-high cutoff (for example, > .99). The reason being is that in my experience over several different detectors and applications, ultra-high cutoffs tend to comprise a fairly non-diverse pool of false positives, as one or two types of recoccuring patterns tend to dominate.  
 
-Choosing an arbitrary cutoff will mean that we may have to further sample if it is too large. Let's check:
+Choosing the arbitrary cutoff of .95 will mean that we may have to further sample if it is too large. Let's check:
 
 ```{r}
 
 lm2gen_hardneg =dbGet("SELECT DISTINCT bins.id FROM bins JOIN bins_detections ON bins_detections.bins_id = bins.id JOIN
-                      detections ON bins_detections.detections_id = detections.id WHERE bins.type = 1 AND detections.procedure= 5
-                      AND detections.label = 0 AND detections.probability >= .95")
+                      detections ON bins_detections.detections_id = detections.id JOIN procedures ON detections.procedure =
+                      procedures.id 
+                      WHERE procedures.name = 'LM INSTINCT detector first deployment' AND bins.type = 1 AND detections.label = 0 AND detections.probability >= .95")
 
 lm2gen_hardneg = as.integer(lm2gen_hardneg$id)
 
@@ -317,7 +285,7 @@ lm2gen_hardneg = lm2gen_hardneg[-which(lm2gen_hardneg %in% c(lm2gen_train_rand_s
 print(length(lm2gen_hardneg))
 ```
 
-This is too large, so we will take a third of it
+This is too large (our target for time management was 650 bins), so we will take a third of it
 
 ```{r}
 lm2gen_hardneg_ds = sample(lm2gen_hardneg,round(length(lm2gen_hardneg)/3))
@@ -325,11 +293,13 @@ print(length(lm2gen_hardneg_ds))
 
 ```
 
+Later, we'll show how this sample distributes throughout the data along with another sample we will create for this retraining. 
+
 ## Odd positives
 
-We noted earlier that the spatial distribution of our training data was heavily biased towards the Bering- while the addition of hard negatives will help expand our training set spatially, we should also attempt to integrate more data from the higher latitudes with a strategic sample. 
+We noted earlier that the spatial distribution of our training data was heavily biased towards the Bering- while the addition of hard negatives will help expand our training set spatially, we should also attempt to integrate more data from the higher latitudes with a strategic sample. As before, these data were previously run but will now be reviewed with implied negative assumption (data manually reviewed with every call boxed). 
 
-For the last data source, I decided to pull 'odd positives'- sort of the logical reversal of hard negatives. Instead of likely (high probability) detections that were marked no, odd positives will be the unlikely detections that were marked as yes. However, with odd positives, likelihood of the detection it won't be using a probability threshold (low probabilities arenot reviewed in verification), but using spatial criteria. 
+For the last data source, I decided to pull 'odd positives'- sort of the logical reversal of hard negatives. Instead of likely (high probability) detections that were marked no, odd positives will be the "unlikely" detections that were marked as yes. Since the detector review protocol will not return low probability detections, unlikelyness will be determined with spatial criteria as opposed to probability. Our spatial criteria will only consider mooring locations where only a small amount of low moans were detected, treating our moorings with many detections as outliers for the sample. 
 
 What mooring locations are more or less likely to contain low moans? 
 
@@ -339,12 +309,15 @@ tp_rate = dbGet("SELECT location_code, COUNT(CASE WHEN label = 1 THEN 1 END) AS 
                  COUNT(DISTINCT(data_collection.name)) AS dep_num
                  FROM detections JOIN soundfiles
                  ON detections.start_file = soundfiles.id JOIN data_collection ON
-                 data_collection.id = soundfiles.data_collection_id WHERE detections.procedure = 5 GROUP BY location_code")
+                 data_collection.id = soundfiles.data_collection_id JOIN procedures ON detections.procedure = procedures.id 
+                 WHERE procedures.name = 'LM INSTINCT detector first deployment' GROUP BY location_code")
 
 tp_rate$rate = tp_rate$tp/(tp_rate$tp + tp_rate$fp)
 
 tp_rate$per_dep = tp_rate$tp/tp_rate$dep_num
 
+#arbitrary cutoff looking at the per deployment counts in the data- considering outliers where 
+#per deployment counts exceed 100 for the original detector deployment. 
 tp_rate$outliers = tp_rate$per_dep > 100 
 
 ggplot(tp_rate, aes(x=location_code,y=per_dep,fill = outliers))+ geom_bar(stat="identity") +
@@ -366,7 +339,8 @@ Now, we can pull the sample:
 lm2gen_oddtp = dbGet(
   "SELECT DISTINCT bins.id FROM detections JOIN bins_detections ON bins_detections.detections_id = detections.id
   JOIN bins ON bins.id = bins_detections.bins_id JOIN soundfiles ON bins.soundfiles_id = soundfiles.id JOIN
-  data_collection ON data_collection.id = soundfiles.data_collection_id WHERE bins.type = 1 AND detections.procedure = 5 AND
+  data_collection ON data_collection.id = soundfiles.data_collection_id 
+  WHERE bins.type = 1 AND detections.procedure = 5 AND
   detections.label = 1 AND data_collection.location_code NOT IN ('BS03','PM02','PM04')"
 )
 
@@ -385,158 +359,166 @@ print(length(lm2gen_oddtp))
 
 Since this is fewer bins than the other data soures, we shouldn't additionally sample it but include it as is. 
 
-## Loading the data sources into the database
-
-For use in training, as well as for general use and recordkeeping purposes, we can load these training sample back into the database as entries in 'effort'. This has already been completed prior to the creation of this Rmarkdown, but here is the code which originally loaded in the data. Let's look at the first row of the effort table: 
+Now that we have our new training samples, let's compare how they stack up compare to the first detector sample in terms of spatiotemporal coverage. This is the total training coverage of the new sample, with combined effort in cyan:
 
 ```{r}
-print(dbGet("SELECT * FROM effort LIMIT 1"))
-```
-
-Effort lets us id, name and describe each sample.
-
-```{r}
-
-effort_table = data.frame(c("lm2gen_og_train","lm2gen_train_pos_set_no_ovlp","lm2gen_train_rand_set_no_ovlp","lm2gen_hardneg_ds","lm2gen_oddtp"),c("semi-random no overlap","high grade random no overlap","random no overlap","hard negative downsampled","procedural"),
-                          c("The ground truth training used in the previous LM detector: BS13_AU_PM02-a_files_343-408_lm, BS14_AU_PM04_files_189-285_lm, BS14_AU_PM04_files_304-430_lm, BS14_AU_PM04_files_45-188_lm, BS13_AU_PM02-a_files_38-122_lm, BS13_AU_PM02-a_files_510-628_lm",
-                                                                                                                                                                                                                                                                              "LMyesSample_1 without overlap from lm2gen_og_train (1st gen training set)","oneHRonePerc without overlap from lm2gen_og_train (1st gen training set) OR lm2gen_train_pos_set_no_ovlp",
-                                                                                                                                                                                                                                                                              "Hard negatives from LM 1st gen detector deployment. >=.95 probability, and downsampled by factor of 9. No overlap with lm2gen_og_train, lm2gen_train_pos_set_no_ovlp, lm2gen_train_rand_set_no_ovlp",
-                                                                                                                                                                                                                   
-            "True positives from less common sites (minus all with > 100 LM tp/mooring deployment avg: BS03 PM02 PM04) from LM 1st gen deployment. no overlap with lm2gen_og_train, lm2gen_train_pos_set_no_ovlp, lm2gen_train_rand_set_no_ovlp, or lm2gen_hardneg_ds"))
-
-colnames(effort_table) = c('name','sampling_method','description')
-
-#dbAppendTable(con,'effort',effort_table) #commented out since it's already been run
-
-```
-
-We also need to enter info to allow us to relate effort back to the component bins ("bins_effort") and track assumptions between the segment of effort and the procedure ("effort_procedures"). Let's look at the first row of the effort_procedures table. 
-
-```{r}
-print(dbGet("SELECT * FROM effort_procedures LIMIT 1"))
-```
-
-This table allows us to relate the status of a unit of effort for a specific procedure, along with the relevant signal code. Other info in this relation is the type of relationship, for instance, we are using this data for 'train_eval' so our current samples would also fit that category. This could also describe a data sample which was used for only detector inference. Assumption refers to the status of 'empty space' produced in the analysis- an 'i_neg' (implied negative) assumption means that empty space between detections is assumed to be a human verified no (0). This could also be 'bin_negative_LOW', such as the low moan deployment, which assumes that bins in which there were no verified low moans are a protocol no (20). Completed is a way of tracking whether this assumption applies - for instance, if a implied negative training sample were currently being annotated, it would be innapropriate to assume that the empty space indicates no positive signal presence. 
-
-Since this table has a foreign key on the effort table, the first step will be to relate the automatically assigned effort ids back to our data samples, and then construct the effort_procedures table for upload. 
-
-```{r}
-
-#retrieve the new effort ids: 
-
-effort_table_wid = dbGet("SELECT * FROM effort WHERE name IN ('lm2gen_og_train','lm2gen_train_pos_set_no_ovlp','lm2gen_train_rand_set_no_ovlp','lm2gen_hardneg_ds','lm2gen_oddtp')")
-
-effort_procedures = effort_table_wid[,c(1,2)]
-
-effort_procedures = effort_procedures[order(effort_procedures$id),]
-  
-#the procedures for the  miscellaneous training data, such as for this and the previous retraining, are id 10. However, the procedure for the positive sample (13) and negative sample (12) have specific procedures as independent studies. When the INSTINCT training process queries GT, it will simply take a union of signals from the procedures 10,12, and 13, and is instructed to remove overlapping boxes for purposes of training.   
-
-effort_procedures = data.frame(effort_procedures$id,c(10,13,12,10,10),3,"train_eval","i_neg",c("y","y","y","n","n"),effort_procedures$name)
-
-colnames(effort_procedures) = c("effort_id","procedures_id","signal_code","effproc_type","effproc_assumption","completed")
-
-#dbAppendTable(con,'effort_procedures',effort_procedures) #submit the data to the database
-
-```
-
-The last step is to link the effort to bins (sample below)
-
-```{r}
-print(dbGet("SELECT * FROM bins WHERE type = 1 LIMIT 1"))
-```
-
-With the join table bins_effort
-
-```{r}
-print(dbGet("SELECT * FROM bins_effort LIMIT 1"))
-```
-
-We will use the vectors of bins we pulled from the database and removed duplicates from earlier in the doc. 
-
-```{r}
-
-#refer to the effort table created earlier to link names to ids
-
-allbins = list()
-
-allbins[[1]] = data.frame(lm2gen_og_train,248)
-colnames(allbins[[1]]) = c("bins_id","effort_id")
-
-allbins[[2]] = data.frame(lm2gen_train_pos_set_no_ovlp,249)
-colnames(allbins[[2]]) = c("bins_id","effort_id")
-
-allbins[[3]] = data.frame(lm2gen_train_rand_set_no_ovlp,250)
-colnames(allbins[[3]]) = c("bins_id","effort_id")
-
-allbins[[4]] = data.frame(lm2gen_hardneg_ds,251)
-colnames(allbins[[4]]) = c("bins_id","effort_id")
-
-allbins[[5]] = data.frame(lm2gen_oddtp,252)
-colnames(allbins[[5]]) = c("bins_id","effort_id")
-
-allbins = do.call("rbind",allbins)
-
-#dbAppendTable(con,'bins_effort',allbins) #submit to db
-
-```
-
-The data are now fully loaded! Now that we have our new training sample, let's compare how it stacks up to the original in terms of spatiotemporal coverage. This is the total training coverage of the new sample:
-
-```{r}
-lm_map_LM2gen = lm_map + add_layer_ble(con,3,10,'cyan',c("lm2gen_og_train")) + add_layer_ble(con,3,13,'cyan',c("lm2gen_train_pos_set_no_ovlp")) + add_layer_ble(con,3,12,'cyan',c("lm2gen_train_rand_set_no_ovlp"))+ add_layer_ble(con,3,10,'cyan',c("lm2gen_hardneg_ds")) + add_layer_ble(con,3,10,'cyan',c("lm2gen_oddtp"))
+lm_map_LM2gen = lm_map + pgpamdb::add_layer_ble(con,3,10,'cyan',c("lm2gen_og_train")) + pgpamdb::add_layer_ble(con,3,13,'cyan',c("lm2gen_train_pos_set_no_ovlp")) + pgpamdb::add_layer_ble(con,3,12,'cyan',c("lm2gen_train_rand_set_no_ovlp"))+ pgpamdb::add_layer_ble(con,3,10,'cyan',c("lm2gen_hardneg_ds")) + pgpamdb::add_layer_ble(con,3,10,'cyan',c("lm2gen_oddtp"))
 plot(lm_map_LM2gen)
 ```
 
-This is the same map, with the old training coverage superimposed: 
+This is the same map, with the first detector training coverage superimposed in orange: 
 
 ```{r}
-lm_map_LM2gen_wog = lm_map_LM2gen + add_layer_ble(con,3,10,'orange',c("lm2gen_og_train")) 
+lm_map_LM2gen_wog = lm_map_LM2gen + pgpamdb::add_layer_ble(con,3,10,'orange',c("lm2gen_og_train")) 
 plot(lm_map_LM2gen_wog)
 ```
 
-Following this doc, I manually annotated signals in the hard negative and oddtp set, and integrated all of the samples into training. The tool I used for annotation of the set was a pipeline in INSTINCT which pulled the effort from the database, paired it with the associated soundfiles, and loaded a template into Raven pro which I could analyze. 
-```{r}
-prcurve <- plot(load.image("//akc0ss-n086/NMML_CAEP_Acoustics/Detector/Datasets_transfer/lm2rmarkdownscreens/edit_in_raven.png"),axes=FALSE, ann=FALSE)
+## Second generation detector training and evaluation. 
 
+Outside of this Rmarkdown, I manually annotated signals in the hard negative and oddtp set, and integrated all of the samples into training. The tool I used for annotation was a pipeline in INSTINCT (EditGTpublish) which pulls the effort from the database, pairs it with the associated soundfiles, loads a the data into Raven pro for analysis, and uploads the edited data to the database. INSTINCT is not easy to showcase here as it is a standalone application, not a package you can use in R or python. Here is a screenshot of the manual annotation process while in Raven. 
+```{r, include=FALSE}
+raven_screen <- plot(load.image("//akc0ss-n086/NMML_CAEP_Acoustics/Detector/Datasets_transfer/lm2rmarkdownscreens/edit_in_raven.png"))
 
 ```
 
+```{r}
+#file from a seperate process
+plot(raven_screen, axes=FALSE, ann=FALSE)
+```
+Once the new effort samples had been comprehensively boxed, I ran the model, which again happened outside of this Rmarkdown. The result was a high quality detector, known as the second generation low moan detector. Here are some of the artifacts of the model training process. First, here is a precision-recall curve of the trained detector applied to the training and validation data. A precision-recall curve plots the precision (of detections, the proportion of true positive to false positive detections) vs recall (proportion of true positives returned vs the total available pool of true positives). The lines vs dots are two ways of calculating the statistics which should be in fairly close agreement. 
 
-After I was done, the script automatically updates the 'implied negatives' and resubmits them along with the positive annotations to the database with minimal changes. In the case where multiple different effort samples are used for different projects, the script will standardize implied negative labels across the same signal code and procedure. 
+One important thing to note about prCurves and their associated AUC is that they are strongly influenced by the composition of the training data, and so detector performance can't be compared across training sets. Performance should be judged relative to prior performance statistics on the same training set, making sure to also compare performance qualitatively on real data. 
 
-Once the new effort samples had been comprehensively boxed, I ran the model. The result was a high quality detector. Here are some of the artifacts of the model training process. First, here is a precision-recall curve of the trained detector applied to the training and validation data. A precision-recall curve plots the precision (of detections, the proportion of true positive to false positive detections) vs recall (proportion of true positives returned vs the total available pool of true positives). The lines vs dots flags to me disagreement between how the analyst labels compare with calculated labels, and here they are in good agreement (in the weeds, feel free to ask me more about this).
+```{r, include=FALSE}
+prcurve <- load.image("//akc0ss-n086/NMML_CAEP_Acoustics/Detector/Datasets_transfer/501729/PE2DL_all_Train_PE2ball/PRcurve.png")
 
-One important thing to note about prCurves and their associated AUC is that they are strongly influenced by the composition of the training data, and so detector performance can't be compared across training sets. During training, an iterative process is required where performance must be matched by experimentation with use of the model, and improvement can be sought until the tool is satisfactory or diminishing returns are reached. 
+```
 
 ```{r}
-prcurve <- load.image("//akc0ss-n086/NMML_CAEP_Acoustics/Detector/Datasets_transfer/405929/PE2DL_all_Train_PE2ball/PRcurve.png")
+#file from a seperate process
 plot(prcurve, axes=FALSE, ann=FALSE)
-
-
 ```
 
 An important consideration for statistical interpretation of this model's performance is that selection of data which can improve the performance of the model may also have the effect of driving down performance statistics. The inclusion of a very large dataset ("negative sample") which contained few low moans will drive down the precision statistics (more time = more false positives). Another example of this is selection of high SNR data, as well as hard negatives- this will provide the model with extremely useful examples for the hardest cases it will face, but at the same time will decrease performance statistics as these instances will be more frequently missed. 
 
-Keep in mind when selecting data that trying to cater to performance statistics too strongly may end up weakening your model, and argue to any reviewers who question performance numbers as validity of a successful model. 
+Keep in mind when selecting data that trying to cater to performance statistics too strongly may end up weakening your model, so even if it helps the paper get published, it may be working against you. 
 
-Alternate stastics can also be employed: for instance, plotting false positives per hour vs recall stands up better to datasets with more sparse instances of the target signal. 
+Alternate stastics can also be employed to highlight important aspects of the training set. For instance, plotting false positives per hour vs recall stands up better to datasets with more sparse instances of the target signal. 
 
 Here are other statistics that are exported from the model run:
 
 ```{r}
 
-stats = read.csv("//akc0ss-n086/NMML_CAEP_Acoustics/Detector/Datasets_transfer/405929/Model_Stats_Train_Stats.csv")
+stats = read.csv("//akc0ss-n086/NMML_CAEP_Acoustics/Detector/Datasets_transfer/501729/Model_Stats_Train_Stats.csv")
 stats_0.9c = stats[which(stats$cutoff_==0.9),]
 
+#get rid of some in the weeds/ less used stats by removing certain columns 
 stats_0.9c = stats_0.9c[,-c(13,14)]
 
-#get rid of some in the weeds/ less used stats
 
-print(stats_0.9c)
+
+knitr::kable(stats_0.9c)
 
 ```
 
-The FPperHOurs to acheive a recall > 80% is quite low, with 1.6 predicted false positives each hour on the validation set. 
+Less than 1 FP/hour are necessary to acheive a recall of ~75% on the test set. These are good numbers: 12 fp/hour is often (completely arbitrarily) touted in the community as a resonable amount of FP/hour for review.  
 
-To evaluate this model in a real world example, I deployed it on the moorings BS13_AU_04b, which Cole had previously reviewed on a very low probability cutoff in the first model deployment to use as a future performance comparison. 
+To evaluate this model in a real world example, I deployed it on the moorings BS13_AU_04b, which Cole had previously reviewed on a very low probability cutoff in the first model deployment to use as a future performance comparison. The very low cutoff represented a cutoff which would enable discovery of more tps, but was unrealistic to scale the analysis across our data. It was selected based on what we knew about his pace to ensure a fairly comprehensive analysis in a multi-week period. 
+
+```{r}
+
+#get the weekly % presence. This gquery ets yes bins per time for procedures 5, 21, and 22
+
+per_time_y_bins_q = "SELECT DISTINCT ON (subquery.time,subquery.procedure) subquery.time,subquery.procedure,COUNT(*) FROM 
+(SELECT DISTINCT ON (time,procedure,bins.id) date_trunc('week', soundfiles.datetime) AS time,COUNT(*),procedure,bins.id 
+FROM detections JOIN bins_detections ON detections.id = bins_detections.detections_id JOIN bins ON bins_detections.bins_id = bins.id JOIN soundfiles ON soundfiles.id = bins.soundfiles_id JOIN data_collection ON data_collection.id = soundfiles.data_collection_id 
+WHERE data_collection.name = 'BS13_AU_PM04' AND detections.label = 1 AND detections.procedure IN (5,21,22) AND bins.type = 1 GROUP by time,procedure,bins.id) AS subquery 
+GROUP by time,procedure"
+
+output = dbGet(per_time_y_bins_q)
+output$count = as.integer(output$count)
+
+#now query for all bins (regardless of y or n) per week
+
+per_time_all_q = "SELECT COUNT(*),date_trunc('week', soundfiles.datetime) AS time 
+FROM bins JOIN soundfiles ON bins.soundfiles_id = soundfiles.id JOIN data_collection ON data_collection.id = soundfiles.data_collection_id 
+WHERE data_collection.name = 'BS13_AU_PM04' AND bins.type = 1 
+GROUP by time"
+
+#merge queries into single table
+all_bins = dbGet(per_time_all_q)
+all_bins$count = as.integer(all_bins$count)
+colnames(all_bins)[1]="total_bins"
+
+alltimes5 = merge(output[which(output$procedure==5),],all_bins,all.y = TRUE)
+alltimes5$procedure=5
+alltimes21= merge(output[which(output$procedure==21),],all_bins,all.y = TRUE)
+alltimes21$procedure=21
+alltimes22 = merge(output[which(output$procedure==22),],all_bins,all.y = TRUE)
+alltimes22$procedure=22
+
+alltimes = rbind(alltimes5,alltimes21,alltimes22)
+
+#calculate percent presence per week
+alltimes[which(is.na(alltimes$count)),"count"]=0
+alltimes$perc_pres = alltimes$count/alltimes$total_bins
+
+#format table for prettier plotting
+alltimes$procedure = as.character(alltimes$procedure)
+alltimes$procedure[which(alltimes$procedure=="5")]="detector_1gen"
+alltimes$procedure[which(alltimes$procedure=="22")]="detector_1gen_low_cutoff"
+alltimes$procedure[which(alltimes$procedure=="21")]="detector_2gen"
+alltimes$procedure = factor(alltimes$procedure,levels = c("detector_2gen","detector_1gen_low_cutoff","detector_1gen"))
+
+out = ggplot(data=alltimes,colour="black", aes(x=time, y=perc_pres, fill = procedure)) + 
+  geom_line() +
+geom_area(position="identity") + 
+        scale_x_datetime(date_breaks = "1 month", date_labels = "%b-%y",expand=c(0,0)) + 
+        scale_y_continuous(expand=c(0,0)) + 
+        ggtitle("BS13_AU_BS04 low moan weekly % presence") +
+        theme_bw() +
+  scale_color_viridis_d(aesthetics = "fill")
+
+
+plot(out)
+```
+
+While the lower cutoff on the original detector is clearly an improvement from the original detector and cutoff, the 2nd gen model reveals even more presence that would have previously been missed. However, positive presence isn't the whole story- let's compare these three approaches by the amount of false positives per procedure. 
+
+```{r}
+tp_fp_proc = "SELECT COUNT(*),procedure,label FROM detections JOIN soundfiles ON detections.start_file = soundfiles.id JOIN data_collection ON data_collection.id = soundfiles.data_collection_id 
+WHERE label IN (1,0) AND procedure IN (5,21,22) AND data_collection.name = 'BS13_AU_PM04' GROUP by label,procedure"
+
+#format data for prettier plotting
+tp_fp_out = dbGet(tp_fp_proc)
+tp_fp_out$count = as.integer(tp_fp_out$count)
+tp_fp_out$count_log = log(tp_fp_out$count)
+tp_fp_out$procedure = as.character(tp_fp_out$procedure)
+tp_fp_out$procedure[which(tp_fp_out$procedure=="5")]="detector_1gen"
+tp_fp_out$procedure[which(tp_fp_out$procedure=="22")]="detector_1gen_low_cutoff"
+tp_fp_out$procedure[which(tp_fp_out$procedure=="21")]="detector_2gen"
+tp_fp_out$procedure = factor(tp_fp_out$procedure,levels = rev(c("detector_2gen","detector_1gen_low_cutoff","detector_1gen")))
+tp_fp_out$label= as.character(tp_fp_out$label)
+tp_fp_out$label[which(tp_fp_out$label==1)]="TP"
+tp_fp_out$label[which(tp_fp_out$label==0)]="FP"
+
+g <- ggplot(tp_fp_out, aes(x=procedure,y=count,fill = label))+ geom_bar(stat = "identity", position="dodge") +
+  theme_bw() +
+    scale_y_continuous(trans='log10',
+                     breaks=trans_breaks('log10', function(x) 10^x),
+                     labels=trans_format('log10', math_format(10^.x)))+
+  ylab("counts (log 10 scale)")
+
+plot(g)
+
+
+```
+
+Comparing the detectors side by side, we can see that the performance of the 2nd gen detector is superior to both configurations of the first detector, both in quantity of true positives and the ratio of true positives to false positives. This is especially impressive, considering that the low cutoff detector generated fewer true positives than the second generation model but that the rate of false positives was completely infeasible for review for the low cutoff 1st gen detector, while the rate of false positives was roughly the same between the 1st (normal cutoff) and 2nd generation low moan detectors. 
+
+Consider as well that not all false positives are created equal. While the detector_1gen_low_cutoff was a three-week, excruciating exercise in monotony (Thanks Cole!) the detector_2gen false positives were largely arguable, or returned signals which while incorrect should be returned in review due to their similarity and reliance on contextual features unavailable to the detector. 
+
+Quantitatively and qualitatively we were able to use multiple rounds of detector development to produce a high quality, second generation low moan detector. Further tuning to a more selective criteria is always possible through more rounds of label review.
+
+Thanks for the read!
+-Dan 
