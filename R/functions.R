@@ -797,7 +797,7 @@ table_update <-function(conn,tablename,dataset,colvector=NULL,idname = 'id'){
 #' @param hard_delete bool specifying whether to 'hard delete', refering to the archiving behavior of detections table on first delete. Only does anything if tablename = 'detections'
 #' @return result
 #' @export
-table_delete <-function(conn,tablename,ids,idname = 'id',hard_delete=FALSE){
+table_delete_old <-function(conn,tablename,ids,idname = 'id',hard_delete=FALSE){
 
   if(length(ids)>1){
     #query = paste("DELETE FROM ",tablename," WHERE ",idname," =ANY(Array [",paste(ids,collapse=",",sep=""),"])",sep="")
@@ -827,7 +827,17 @@ table_delete <-function(conn,tablename,ids,idname = 'id',hard_delete=FALSE){
 
 }
 
-table_delete2 <-function(conn,tablename,ids,idname = 'id',hard_delete=FALSE){
+#' Delete data in the database by id
+#'
+#' Delete data in a named database table. Assumes postgresql db with existing connection.
+#' @param conn The database connection
+#' @param tablename The name of the data table in the database
+#' @param ids The id vector to delete. All rows with id in vector will be deleted.
+#' @param idname character string specifying name of primary key.
+#' @param hard_delete bool specifying whether to 'hard delete', refering to the archiving behavior of detections table on first delete. Only does anything if tablename = 'detections'
+#' @return result
+#' @export
+table_delete <-function(conn,tablename,ids,idname = 'id',hard_delete=FALSE){
 
   dbBegin(conn)
 
@@ -846,27 +856,36 @@ table_delete2 <-function(conn,tablename,ids,idname = 'id',hard_delete=FALSE){
 
     tablength = length(ids)
 
-    start_curr = dbFetch(dbSendQuery("SELECT currval('detections_id_seq')"))
+    start_curr = dbFetch(dbSendQuery(conn,"SELECT last_value FROM detections_id_seq"))+1
+
+    start_curr = as.integer(start_curr$last_value)
+
+    ids_above_currval = dbFetch(dbSendQuery(conn,paste("SELECT id FROM detections WHERE id >",start_curr,"-1")))
 
     #execute query first time here.
     dbExecute(conn,query)
 
-    end_curr = dbFetch(dbSendQuery("SELECT currval('detections_id_seq')"))
+    end_curr = start_curr+length(ids)-1
+    new_ids = start_curr:end_curr
 
-    #compare lengths of start and end of sequence. If they are consistent, then we can assume the new id values.
-    if(tablength!= lenght(start_curr:end_curr)){
-      stop("Cannot predict ids after deletion- operation terminated")
+    #check if there are any ids above currval in the new sequence. If there are, requires more elaborate calculation.
+    #if not, can proceed with the assumption that these new ids can be deleted.
+    if(length(ids_above_currval$id)>0){
+      ids_above_currval$id = as.integer(ids_above_currval$id)
+      if(any(ids_above_currval %in% new_ids)){
+        stop("Cannot assume new ids due to the presence of manually inserted ids above detections id sequence. Transaction aborted.")
+      }
     }
-
-    #instead of
 
     if(length(ids)>1){
       #query = paste("DELETE FROM ",tablename," WHERE original_id =ANY(Array [",paste(ids,collapse=",",sep=""),"])",sep="")
-      query = paste("DELETE FROM ",tablename," WHERE original_id IN (",paste(ids,collapse=",",sep=""),")",sep="")
+      query = paste("DELETE FROM ",tablename," WHERE id IN (",paste(new_ids,collapse=",",sep=""),")",sep="")
     }else{
-      query = paste("DELETE FROM ",tablename," WHERE original_id IN",paste("(",ids,")",sep=""))
+      query = paste("DELETE FROM ",tablename," WHERE id IN",paste("(",new_ids,")",sep=""))
 
     }
+
+    out = dbExecute(conn,query)
 
   }
 

@@ -361,6 +361,11 @@ bin_negatives<-function(data,FG,bintype,analyst='previous',procedure = NULL,sign
 
 }
 
+dbGet <-function(x){
+  x = gsub("[\r\n]", "", x)
+  dbFetch(dbSendQuery(con,x))
+}
+
 #GT and FG data loader.
 
 library(DbuddyTools)
@@ -1743,11 +1748,6 @@ test2 = bin_label_explore(con,"lm")
 bins_w_analysis = "SELECT COUNT(*),subquery.name FROM (SELECT DISTINCT ON (bins.id) COUNT(*),data_collection.name FROM detections JOIN bins_detections ON bins_detections.detections_id = detections.id JOIN bins ON bins.id = bins_detections.bins_id
  JOIN soundfiles ON bins.soundfiles_id = soundfiles.id JOIN data_collection ON data_collection.id = soundfiles.data_collection_id WHERE bins.type = 1 AND detections.label IN (1,20) AND detections.procedure = 5 GROUP BY bins.id,data_collection.name) AS subquery GROUP BY subquery.name"
 
-dbGet <-function(x){
-  x = gsub("[\r\n]", "", x)
-  dbFetch(dbSendQuery(con,x))
-}
-
 bins_w_analysis_out = dbGet(bins_w_analysis)
 
 allbins = "SELECT COUNT(*),data_collection.name FROM bins JOIN soundfiles ON bins.soundfiles_id = soundfiles.id JOIN data_collection ON data_collection.id =
@@ -2114,9 +2114,193 @@ round_errdets = round_err[,c(2:18),] #all original values minus id
 #fixed! I think before I go further, I should really try to fix table_delete so I can actually use it predictably without
 #breaking stuff.
 
+#experiment with table_delete2 on a dummy table in a test db to see if it works.
+
+con2 = pamdbConnect('test',keyscript,clientkey,clientcert)
+
+dbFetch(dbSendQuery(con2,"SELECT * FROM increment_test_table"))
+
+dbFetch(dbSendQuery(con2,"SELECT currval('increment_test_table_id_seq')"))
+
+#alright, fill in some data.
+testdata = data.frame(c(1,2,3,4,5,6))
+names(testdata) = 'data'
 
 
+testdata2 = data.frame(7,7)
+colnames(testdata2) = c('id','data')
 
+#dbAppendTable(con2,'increment_test_table',testdata)
+
+#table_delete2(con2,'increment_test_table',c(3,4,5))
+
+#dbAppendTable(con2,'increment_test_table',testdata2)
+
+testdata3 = data.frame(8)
+names(testdata3) = 'data'
+
+dbAppendTable(con2,'increment_test_table',testdata3)
+
+#test out new table_delete with dummy data. First, load in some dummy data.
+
+template = dbGet("SELECT * FROM detections LIMIT 3")
+
+#going to make it as simple to locate as possible
+
+template$id = NULL
+template$start_time = c(1,2,3)
+template$end_time = c(2,3,4)
+template$low_freq = c(100,100,100)
+template$high_freq = c(200,200,200)
+template$start_file=1
+template$end_file=1
+template$probability=NA
+template$comments="dummy data for function testing- delete if encountered"
+template$procedure=0
+template$label=99
+template$signal_code=1
+template$strength=1
+
+#submit template as new data.
+
+dbAppendTable(con,'detections',template)
+
+dbGet("SELECT * FROM detections WHERE start_file = 1")
+
+#try out new table delete on these. do it line by line manually at first just in case.
+
+ids = c(35624874,35624875,35624876)
+
+#Seems to work and make sense. Now, try it with the new function.
+data_save =dbGet("SELECT * FROM detections WHERE original_id IN (156651,156652,156653)")
+
+#add back in template:
+
+#dbAppendTable(con,'detections',template)
+
+#cool, it works.
+#table_delete(con,'detections',c(35624880,35624881,35624882),hard_delete = TRUE)
+
+#alright, now, back to the LM data cleaning. Where was I?
+#need to look at data where the soundfile appears to be miscalculated. Not sure if theres a way to do this other than
+#a lot of individual queries in a loop.
+
+
+bug_dets = dbGet("SELECT * FROM detections JOIN soundfiles ON detections.end_file = soundfiles.id
+                 WHERE detections.status = 1 AND detections.end_time > soundfiles.duration")
+
+#some remaining cases we have:
+#both start and end file exceed duration (means it is probably next file- but hard to validate this.)
+#end file is a seperate file, but duration of that file was miscalculated.
+
+#one case is that there are some 20 dets which exceed length of soundfile, completely. These can be safely deleted.
+
+bug_dets_no_exist = bug_dets[which(bug_dets$label==20),]
+
+#table_delete(con,'detections',as.integer(bug_dets_no_exist$id),hard_delete = TRUE)
+
+#refresh bug_dets, and work on other cases.
+#the case where the file is different but end file dur exceeds is pretty safe to assume that the end duration
+#is not correctly relevant to the start of the new file. Remove any stragler cases and change these in bulk.
+
+bug_dets_incor_end = bug_dets[which(bug_dets$start_file!=bug_dets$end_file),]
+
+bug_dets$id = as.integer(bug_dets$id)
+
+outlier_cases = bug_dets_incor_end[which(bug_dets_incor_end$id %in% c(31246446,31246439,31246457,31246442,30497935)),]
+
+bug_dets_incor_end = bug_dets_incor_end[-which(bug_dets_incor_end$id %in% c(31246446,31246439,31246457,31246442,30497935)),]
+
+bug_dets_incor_end$subtract_by = bug_dets_incor_end$duration
+
+bug_dets_incor_end$subtract_by[which(bug_dets_incor_end$subtract_by %in% c(59,60))]=300
+
+#subtract, then add these back to db. Finally, delete old data.
+
+bug_dets_incor_end$end_time = bug_dets_incor_end$end_time-bug_dets_incor_end$subtract_by
+
+fix_incor_end = bug_dets_incor_end[,c(1:18)]
+
+#dbAppendTable(con,'detections',fix_incor_end[,c(2:length(fix_incor_end))])
+
+#table_delete(con,'detections',as.integer(fix_incor_end$id),hard_delete = TRUE)
+
+#alright, now, keep working on cases. Let's take a look at the 'outlier' cases.
+#one is easy, the rest are not.
+
+eZ1 = outlier_cases[which(as.integer(outlier_cases$data_collection_id)==151),]
+
+eZ1$end_file =27234
+
+#dbAppendTable(con,'detections',eZ1[,c(2:18)])
+
+#table_delete(con,'detections',as.integer(eZ1$id),hard_delete = TRUE)
+#to evalute the rest- if they are correctly positioned on the data, need to adjust file and duration. If they are incorrectly
+#positioned, should adjust to make it accurate to file and then take a look at duration again.
+
+#so, next step is to see if I can make a query for these. but, currently locked out of the VM
+
+
+#in the meantime- I can use the output of the original query for mooring completeness to assess progress for a given
+
+procedure_prog = function(conn,procedure_ids){
+
+  bins_w_analysis = paste("SELECT COUNT(*),subquery.name FROM (SELECT DISTINCT ON (bins.id) COUNT(*),data_collection.name FROM detections JOIN bins_detections ON bins_detections.detections_id = detections.id JOIN bins ON bins.id = bins_detections.bins_id
+ JOIN soundfiles ON bins.soundfiles_id = soundfiles.id JOIN data_collection ON data_collection.id = soundfiles.data_collection_id WHERE bins.type = 1 AND detections.label IN (1,20) AND detections.procedure IN (",paste(procedure_id,collapse=",",sep=""),") GROUP BY bins.id,data_collection.name) AS subquery GROUP BY subquery.name",sep='')
+
+  bins_w_analysis_out = dbFetch(dbSendQuery(conn,bins_w_analysis))
+
+  allbins = "SELECT COUNT(*),data_collection.name,MIN(soundfiles.datetime),MAX(soundfiles.datetime),location_code,latitude FROM bins JOIN soundfiles ON bins.soundfiles_id = soundfiles.id JOIN data_collection ON data_collection.id =
+soundfiles.data_collection_id WHERE bins.type = 1 GROUP BY data_collection.name,location_code,latitude"
+
+  bins_all = dbFetch(dbSendQuery(conn,allbins))
+
+  comp = merge(bins_w_analysis_out,bins_all,by="name",all.y = TRUE)
+
+  comp$perc = comp$count.x/comp$count.y
+
+  latlookup = aggregate(comp,list(comp$location_code),function(x) mean(x,na.rm=TRUE))
+
+  comp$location_code =factor(comp$location_code,level = rev(latlookup$Group.1[order(latlookup$latitude)]))
+
+
+  comp$interp = "unanalyzed"
+  comp$interp[which(comp$perc==1)]= "analyzed"
+  comp$interp[which(comp$perc!=1)]= "partially analyzed"
+  #add a 'ymin' column to comp, depending on if it overlaps within same
+
+  #really, should return plot of moorings run and moorings to go
+  #ymin = ymin, ymax = ymin + 1,
+
+  comp$ymin = 0
+
+  if(any(is.na(comp$location_code))){
+
+    comp=comp[-which(is.na(comp$location_code)),]
+
+  }
+
+  out = ggplot(comp, aes(xmin = min, xmax = max,ymin = ymin, ymax = ymin+1, fill = factor(interp))) + geom_rect(color="black") +
+    facet_grid(location_code~., switch = "y")+  #opts(axis.text.y = theme_blank(), axis.ticks = theme_blank()) #+ xlim(0,23) + xlab("time of day")
+    scale_x_datetime(date_breaks = "6 months" , date_labels = "%m-%y",expand=c(0,0)) +
+    #ggtitle(paste(bin_label,"monthly",bt_str,"bin % presence")) +
+    theme_bw() +
+    theme(legend.title = element_text(size=12),
+          legend.text = element_text(size=12),
+          strip.text.y.left = element_text(angle = 0, face = "bold")) +
+    theme(axis.text = element_text(size=12),
+          axis.title.y = element_blank(),
+          axis.text.y = element_blank(),
+          axis.ticks = element_blank(),
+          panel.grid.minor = element_blank(),
+          panel.grid.major = element_blank(),
+          panel.border = element_blank(),
+          strip.background = element_rect(colour=NA, fill=NA))+
+    theme(axis.text.x = element_text(angle = 45, hjust = 1)) #+
+    #labs(fill = "% presence")
+  return(out)
+
+}
 
 
 #what about - is there a query which can provide a graphical look at moorings which have or have not been run for a procedure?
