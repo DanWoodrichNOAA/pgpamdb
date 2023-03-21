@@ -32,6 +32,279 @@ pamdbConnect<-function(dbname,infoScript,sslKey_path,sslCert_path){
 
 #helper fxns for db format data and process
 
+#' break FG into n sized bins
+#'
+#' return a vers of a filegroup which has segments broken into sections of size interval.
+#' @param data The filegroup data.
+#' @param interval size in seconds for max bins.
+#' @param format detx or db format
+#' @return FG with rows greater than interval broken into interval sized segments.
+#' @export
+fg_breakbins <-function(data,interval,format='db'){
+
+  out_bins = list()
+
+  for(n in 1:nrow(data)){
+
+    if(format=="DETx"){
+      a = data$SegStart[n]
+      b = (data$SegDur[n]+data$SegStart[n])
+    }else if(format=="db"){
+      a = data$seg_start[n]
+      b = data$seg_end[n]
+    }
+
+    c = interval
+
+    breaks = as.numeric(unique(cut(c((a+0.000001):(b-0.000001)), seq(0, 100000, by=c), include.lowest = F)))
+
+    start = (breaks-1)*c
+    end = breaks*c
+
+    start[1] = a
+    end[length(end)] = b
+    #print(cbind(start,end))
+
+    dur = end-start
+
+    if(format=="DETx"){
+
+      if("SiteID" %in% colnames(data)){
+
+        out_ = data.frame(data$FileName[n],data$FullPath[n],data$StartTime[n],data$Duration[n],data$Deployment[n],start,dur,data$SiteID[n])
+
+      }else{
+
+        out_ = data.frame(data$FileName[n],data$FullPath[n],data$StartTime[n],data$Duration[n],data$Deployment[n],start,dur)
+
+      }
+
+      colnames(out_) = colnames(data)
+
+    }else if(format=="db"){
+
+      #out_ = data.frame(data$name,data$duration,data$name..5,start,end)
+      out_ = data.frame(data$soundfiles_id[n],start,end)
+
+      #just make this spit out minimal needed
+      colnames(out_) = c("soundfiles_id","seg_start","seg_end")
+
+    }
+
+    out_bins[[n]] = out_
+  }
+
+  fg_broke= do.call('rbind',out_bins)
+
+  return(fg_broke)
+}
+
+#' produce bin negatives
+#'
+#' create data frame of bin negatives for a detector deployment on arbitrary fg
+#' @param data The detection data
+#' @param FG The filegroup
+#' @param bintype "LOW","REG", or "SHI" . Will automatically break bins so that it is on best timescale for queries.
+#' @param procedure procedure id to populate in output object. defaults to procedure in 1st row if provided in data.
+#' @param signal_code signal_code to populate in output object. defaults to signal_code in 1st row if provided in data.
+#' @param format detx or db format
+#' @return data frame of bin negatives.
+#' @export
+bin_negatives<-function(data,FG,bintype,analyst='previous',procedure = NULL,signal_code =NULL,format='db'){
+
+  out_negs = vector("list",2)
+
+  selection = which(c("LOW","REG","SHI")==bintype)
+
+  interval = c(300,225,90)[selection]
+  highfreq = c(512,8192,16384)[selection]
+
+  #originally based on part of the fin whale data loader.
+  #two part processes- first just takes the files without any detections,
+  #and assumes them to be negative. The other takes the files with detections, and splice them into bins
+  #to determine which are negative bins.
+
+  #assume the data comes in is in detx format.
+
+  if(format=='db'){
+    yes_ = 1
+    yes_2 = 21
+    no_2 = 20
+
+    sf_col= 'start_file'
+    ef_col= 'end_file'
+
+    et_col = 'end_time'
+    st_col = 'start_time'
+
+    if('name' %in% FG){
+      fgfn = "name"
+    }else{
+      fgfn = "soundfiles_id"
+    }
+
+
+    colind_remove = c()
+
+
+    if(is.null(analyst)){
+      analyst="placeholder"
+      colind_remove = c(colind_remove,13)
+
+    }else if(analyst=='previous'){
+      analyst = data$analyst[1]
+    }
+
+    if(is.null(procedure)){
+
+      procedure= data$procedure[1]
+    }
+
+    if(is.null(signal_code)){
+
+      signal_code= data$signal_code[1]
+    }
+
+  }else if(format=='DETx'){
+
+    yes_ = 'y'
+    yes_2 = 'py'
+    no_2 = 'pn'
+
+    sf_col= 'StartFile'
+    sf_col= 'EndFile'
+
+    et_col = 'StartTime'
+    st_col = 'EndTime'
+
+    fgfn = "FileName"
+
+    if(analyst=='previous'){
+      analyst = data$LastAnalyst[1]
+    }
+
+    if(is.null(procedure)){
+
+      stop("procedure must be specific for DETx")
+    }
+
+    if(is.null(signal_code)){
+
+      signal_code= data$SignalCode[1]
+    }
+
+
+  }
+
+  #for this comparison, only need the 'y' label detections
+
+  data = data[which(data$label==yes_ | data$label==yes_2),]
+
+  sfs_w_yes = unique(data[,sf_col],data[,ef_col])
+
+  if(length(sfs_w_yes)>0){
+    fg_w_no = FG[-which(FG[,fgfn] %in% sfs_w_yes),]
+  }else{
+    fg_w_no = fg
+  }
+
+
+  if(nrow(fg_w_no)>0){
+
+    if(format=='DETx'){
+      no_dets_frame = data.frame(0,fg_w_no$Duration,0,highfreq,fg_w_no[,fgfn],fg_w_no[,fgfn],NA,highfreq,'pn',"",signal_code,"DET",9999,analyst)
+
+      colnames(no_dets_frame)=colnames(data)
+    }else if(format=='db'){
+      no_dets_frame = data.frame(0,fg_w_no$duration,0,highfreq,fg_w_no[,fgfn],fg_w_no[,fgfn],NA,"",procedure,no_2,signal_code,2,analyst)
+      colnames(no_dets_frame)=c("start_time","end_time","low_freq","high_freq","start_file","end_file",
+                                "probability","comments","procedure","label","signal_code","strength","analyst")
+      if(length(colind_remove)>0){
+        no_dets_frame = no_dets_frame[,-colind_remove]
+      }
+    }
+
+    if(any(duplicated(no_dets_frame))){
+      no_dets_frame = no_dets_frame[-which(duplicated(no_dets_frame)),]
+    }
+
+    out_negs[[1]]=no_dets_frame
+
+  }
+
+  #now go through the file which do have detections, and determine the negative bins.
+
+  fg_w_yes = FG[which(FG[,fgfn] %in% sfs_w_yes),]
+
+
+
+  if(nrow(fg_w_yes)>0){
+
+    #make sure fg_w_yes is broken into correct interval for this
+    #to do: also make this function work with db fg names/types.
+    fg_w_yes = fg_breakbins(fg_w_yes,interval,format = format)
+
+    rows = list()
+
+    counter = 0
+
+    #loop through each row
+
+    for(i in 1:nrow(fg_w_yes)){
+      #this is now quite simple- if there are any start or end times within the fg row, call it yes, otherwise spit out no.
+
+      if(format =="db"){
+        st = fg_w_yes$seg_start[i]
+        et =fg_w_yes$seg_end[i]
+      }else if(format=='DETx'){
+        st = fg_w_yes$SegStart[i]
+        et =fg_w_yes$SegStart[i]+fg_w_yes$SegDur[i]
+      }
+
+      endtimes = data[which(data[,ef_col]==fg_w_yes[,fgfn][i] & ((data[,et_col]<et) & (data[,et_col]>st))),"EndTime"]
+      starttimes = data[which(data[,sf_col]==fg_w_yes[,fgfn][i] & ((data[,st_col]<et) & (data[,st_col]>st))),"StartTime"]
+
+      if(length(endtimes)==0 & length(starttimes)==0){
+        #no detection, so bin is a pn
+        counter = counter + 1
+
+
+        if(format=='DETx'){
+          rows[[i]] = c(st,et,0,highfreq,fg_w_yes[,fgfn][i],fg_w_yes[,fgfn][i],NA,highfreq,'pn',"",data$SignalCode[1],"DET",9999,analyst)
+
+        }else if(format=='db'){
+          rows[[i]] = c(st,et,0,highfreq,fg_w_yes[,fgfn][i],fg_w_yes[,fgfn][i],NA,"",procedure,no_2,signal_code,2,analyst)
+
+        }
+
+
+      }
+    }
+
+
+    if(length(rows)>0){
+      rows = do.call('rbind',rows)
+      if(format=='DETx'){
+        colnames(rows)=colnames(data)
+      }else if(format=='db'){
+        if(length(colind_remove)>0){
+          colnames(rows)=c("start_time","end_time","low_freq","high_freq","start_file","end_file",
+                           "probability","comments","procedure","label","signal_code","strength","analyst")[-colind_remove]
+        }else{
+          colnames(rows)=c("start_time","end_time","low_freq","high_freq","start_file","end_file",
+                           "probability","comments","procedure","label","signal_code","strength","analyst")
+        }
+      }
+      out_negs[[2]] = rows
+
+    }
+  }
+
+  return(do.call("rbind",out_negs))
+
+
+}
+
 #' Update implied negatives
 #'
 #' Update the implied negatives of a filegroup-procedure-signal_code combination
@@ -797,46 +1070,6 @@ table_update <-function(conn,tablename,dataset,colvector=NULL,idname = 'id'){
 #' @param hard_delete bool specifying whether to 'hard delete', refering to the archiving behavior of detections table on first delete. Only does anything if tablename = 'detections'
 #' @return result
 #' @export
-table_delete_old <-function(conn,tablename,ids,idname = 'id',hard_delete=FALSE){
-
-  if(length(ids)>1){
-    #query = paste("DELETE FROM ",tablename," WHERE ",idname," =ANY(Array [",paste(ids,collapse=",",sep=""),"])",sep="")
-
-    query = paste("DELETE FROM ",tablename," WHERE ",idname," IN (",paste(ids,collapse=",",sep=""),")",sep="")
-  }else{
-    query = paste("DELETE FROM ",tablename," WHERE ",idname," IN",paste("(",ids,")",sep=""))
-
-  }
-
-  if(tablename =="detections" & hard_delete==TRUE){
-
-    #execute query first time here. Then modify it so all are deleted.
-    dbExecute(conn,query)
-
-    if(length(ids)>1){
-      #query = paste("DELETE FROM ",tablename," WHERE original_id =ANY(Array [",paste(ids,collapse=",",sep=""),"])",sep="")
-      query = paste("DELETE FROM ",tablename," WHERE original_id IN (",paste(ids,collapse=",",sep=""),")",sep="")
-    }else{
-      query = paste("DELETE FROM ",tablename," WHERE original_id IN",paste("(",ids,")",sep=""))
-
-    }
-
-  }
-
-  return(dbExecute(conn,query))
-
-}
-
-#' Delete data in the database by id
-#'
-#' Delete data in a named database table. Assumes postgresql db with existing connection.
-#' @param conn The database connection
-#' @param tablename The name of the data table in the database
-#' @param ids The id vector to delete. All rows with id in vector will be deleted.
-#' @param idname character string specifying name of primary key.
-#' @param hard_delete bool specifying whether to 'hard delete', refering to the archiving behavior of detections table on first delete. Only does anything if tablename = 'detections'
-#' @return result
-#' @export
 table_delete <-function(conn,tablename,ids,idname = 'id',hard_delete=FALSE){
 
   dbBegin(conn)
@@ -1141,9 +1374,16 @@ bin_label_explore<-function(conn,bin_label,inst_source='AFSC',plot_sds = 4,bin_t
   #bin_label= 'fw' #temp
   #inst_source = "AFSC"
 
+  if(inst_source == "AFSC"){
+    #bound the approximate region to get rid of the GR and other non-region AFSC data.
+    long_min = -185
+    long_max = -140
+  }
+
   query = paste("SELECT ",bin_label,",count(*),date_trunc('month', soundfiles.datetime) AS dt_,data_collection.name,data_collection.location_code,data_collection.latitude
                 FROM bin_label_wide JOIN bins ON bins.id = bin_label_wide.id JOIN soundfiles ON bins.soundfiles_id = soundfiles.id JOIN data_collection ON data_collection.id = soundfiles.data_collection_id
-                WHERE bins.type = ",bin_type," AND data_collection.institution_source = '",inst_source,"' GROUP BY ",bin_label,",dt_,data_collection.name,data_collection.location_code,data_collection.latitude",sep="")
+                WHERE bins.type = ",bin_type," AND data_collection.institution_source = '",inst_source,"' AND data_collection.longitude < ",long_max," AND data_collection.longitude > ",long_min,
+                " GROUP BY ",bin_label,",dt_,data_collection.name,data_collection.location_code,data_collection.latitude",sep="")
 
   output = dbFetch(dbSendQuery(conn,gsub("[\r\n]", "", query)))
 

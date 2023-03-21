@@ -285,7 +285,8 @@ lm2gen_hardneg = lm2gen_hardneg[-which(lm2gen_hardneg %in% c(lm2gen_train_rand_s
 print(length(lm2gen_hardneg))
 ```
 
-This is too large (our target for time management was 650 bins), so we will take a third of it
+This is too large (our target for time management was 650 bins), so we will take a third of it, randomly sampled with the 
+R sample function. 
 
 ```{r}
 lm2gen_hardneg_ds = sample(lm2gen_hardneg,round(length(lm2gen_hardneg)/3))
@@ -299,9 +300,14 @@ Later, we'll show how this sample distributes throughout the data along with ano
 
 We noted earlier that the spatial distribution of our training data was heavily biased towards the Bering- while the addition of hard negatives will help expand our training set spatially, we should also attempt to integrate more data from the higher latitudes with a strategic sample. As before, these data were previously run but will now be reviewed with implied negative assumption (data manually reviewed with every call boxed). 
 
-For the last data source, I decided to pull 'odd positives'- sort of the logical reversal of hard negatives. Instead of likely (high probability) detections that were marked no, odd positives will be the "unlikely" detections that were marked as yes. Since the detector review protocol will not return low probability detections, unlikelyness will be determined with spatial criteria as opposed to probability. Our spatial criteria will only consider mooring locations where only a small amount of low moans were detected, treating our moorings with many detections as outliers for the sample. 
+For the last data source, I decided to pull 'odd positives'- sort of the logical reversal of hard negatives. Instead of likely (high probability) detections that were marked no, odd positives will be the unlikely detections that were marked as yes. We will use a spatial criteria to determine what 'odd' detections are, which will likely be more powerful than using probability. Reason being is that since the analysis has a fairly high probability cutoff for all the returned detections, we can only go as low as that probability cutoff, and true detections in this range are fairly commonplace. More strange, in my opinion, are true positive detections that occur outside of the Southeastern Bering sea. Using this criteria for the sample also has the effect of preferentially choosing data higher latitudes which are less represented in the other training data. 
 
-What mooring locations are more or less likely to contain low moans? 
+Why do we care what criteria will reduce in more strange detections? Simply put, correcting the strangest observed behaviors will result in more trust and a better detector. Put another way, I thought this criteria would hand the weirdest, hardest cases back to the detector to compell it to deal with them. 
+
+To create this sample, we first have to ask the question: What mooring locations are more or less likely to contain low moans? 
+
+(terms: TP = True Positive, aka a returned detection which was verified to be the target signal. 
+FP = False Positive, aka a returned detection which was verified to be something else than the target signal. )
 
 ```{r}
 tp_rate = dbGet("SELECT location_code, COUNT(CASE WHEN label = 1 THEN 1 END) AS tp,

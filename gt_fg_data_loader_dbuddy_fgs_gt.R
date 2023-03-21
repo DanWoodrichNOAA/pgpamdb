@@ -37,67 +37,6 @@ upload_from_oldold <- function(conn,rav_og_data,fgname){
 
 }
 
-
-#don't move this- most useful for old conversion..?
-fg_breakbins <-function(data,interval,format='db'){
-
-  out_bins = list()
-
-  for(n in 1:nrow(data)){
-
-    if(format=="DETx"){
-      a = data$SegStart[n]
-      b = (data$SegDur[n]+data$SegStart[n])
-    }else if(format=="db"){
-      a = data$seg_start[n]
-      b = data$seg_end[n]
-    }
-
-    c = interval
-
-    breaks = as.numeric(unique(cut(c((a+0.000001):(b-0.000001)), seq(0, 100000, by=c), include.lowest = F)))
-
-    start = (breaks-1)*c
-    end = breaks*c
-
-    start[1] = a
-    end[length(end)] = b
-    #print(cbind(start,end))
-
-    dur = end-start
-
-    if(format=="DETx"){
-
-      if("SiteID" %in% colnames(data)){
-
-        out_ = data.frame(data$FileName[n],data$FullPath[n],data$StartTime[n],data$Duration[n],data$Deployment[n],start,dur,data$SiteID[n])
-
-      }else{
-
-        out_ = data.frame(data$FileName[n],data$FullPath[n],data$StartTime[n],data$Duration[n],data$Deployment[n],start,dur)
-
-      }
-
-    }else if(format=="db"){
-
-      if("name..5" %in% colnames(data)){
-        out_ = data.frame(data$name,data$duration,data$name..5,seg_start,seg_end)
-      }else{
-        out_ = data.frame(data$name,data$duration,seg_start,seg_end)
-      }
-
-    }
-    colnames(out_) = colnames(data)
-    out_bins[[n]] = out_
-  }
-
-  fg_broke= do.call('rbind',out_bins)
-
-  return(fg_broke)
-
-
-}
-
 #don't submit, trivial to submit data when originates with a query.
 submit_fg<-function(con,fgdata,name,sampling_method,description,insert_nonmatching = FALSE){
 
@@ -169,197 +108,8 @@ submit_fg<-function(con,fgdata,name,sampling_method,description,insert_nonmatchi
   return(bins_loaded)
 
 }
+#bin_negatives(data,fg,bintype="LOW",analyst='previous',procedure = 5,signal_code =3,format='db')
 
-#don't submit- needs a rewrite to db standard.
-bin_negatives<-function(data,FG,bintype,analyst='previous',procedure = NULL,signal_code =NULL,format='db'){
-
-  out_negs = vector("list",2)
-
-  selection = which(c("LOW","REG","SHI")==bintype)
-
-  interval = c(300,225,90)[selection]
-  highfreq = c(512,8192,16384)[selection]
-
-  #originally based on part of the fin whale data loader.
-  #two part processes- first just takes the files without any detections,
-  #and assumes them to be negative. The other takes the files with detections, and splice them into bins
-  #to determine which are negative bins.
-
-  #assume the data comes in is in detx format.
-
-  if(format=='db'){
-    yes_ = 1
-    yes_2 = 21
-    no_2 = 20
-
-    sf_col= 'start_file'
-    ef_col= 'end_file'
-
-    et_col = 'end_time'
-    st_col = 'start_time'
-
-    if('name' %in% FG){
-      fgfn = "name"
-    }else{
-      fgfn = "soundfiles_id"
-    }
-
-
-    colind_remove = c()
-
-
-    if(is.null(analyst)){
-      analyst="placeholder"
-      colind_remove = c(colind_remove,13)
-
-    }else if(analyst=='previous'){
-      analyst = data$analyst[1]
-    }
-
-    if(is.null(procedure)){
-
-      procedure= data$procedure[1]
-    }
-
-    if(is.null(signal_code)){
-
-      signal_code= data$signal_code[1]
-    }
-
-  }else if(format=='DETx'){
-
-    yes_ = 'y'
-    yes_2 = 'py'
-    no_2 = 'pn'
-
-    sf_col= 'StartFile'
-    sf_col= 'EndFile'
-
-    et_col = 'StartTime'
-    st_col = 'EndTime'
-
-    fgfn = "FileName"
-
-    if(analyst=='previous'){
-      analyst = data$LastAnalyst[1]
-    }
-
-    if(is.null(procedure)){
-
-      stop("procedure must be specific for DETx")
-    }
-
-    if(is.null(signal_code)){
-
-      signal_code= data$SignalCode[1]
-    }
-
-
-  }
-
-  #for this comparison, only need the 'y' label detections
-
-  data = data[which(data$label==yes_ | data$label==yes_2),]
-
-  sfs_w_yes = unique(data[,sf_col],data[,ef_col])
-
-  if(length(sfs_w_yes)>0){
-    fg_w_no = FG[-which(FG[,fgfn] %in% sfs_w_yes),]
-  }else{
-    fg_w_no = fg
-  }
-
-
-  if(nrow(fg_w_no)>0){
-
-    if(format=='DETx'){
-      no_dets_frame = data.frame(0,fg_w_no$Duration,0,highfreq,fg_w_no[,fgfn],fg_w_no[,fgfn],NA,highfreq,'pn',"",signal_code,"DET",9999,analyst)
-
-      colnames(no_dets_frame)=colnames(data)
-    }else if(format=='db'){
-      no_dets_frame = data.frame(0,fg_w_no$duration,0,highfreq,fg_w_no[,fgfn],fg_w_no[,fgfn],NA,"",procedure,no_2,signal_code,2,analyst)
-      colnames(no_dets_frame)=c("start_time","end_time","low_freq","high_freq","start_file","end_file",
-                                "probability","comments","procedure","label","signal_code","strength","analyst")
-      if(length(colind_remove)>0){
-        no_dets_frame = no_dets_frame[,-colind_remove]
-      }
-    }
-
-    if(any(duplicated(no_dets_frame))){
-      no_dets_frame = no_dets_frame[-which(duplicated(no_dets_frame)),]
-    }
-
-    out_negs[[1]]=no_dets_frame
-
-  }
-
-  #now go through the file which do have detections, and determine the negative bins.
-
-  fg_w_yes = FG[which(FG[,fgfn] %in% sfs_w_yes),]
-
-
-
-  if(nrow(fg_w_yes)>0){
-
-    #make sure fg_w_yes is broken into correct interval for this
-    #to do: also make this function work with db fg names/types.
-    fg_w_yes = fg_breakbins(fg_w_yes,interval,format = format)
-
-    rows = list()
-
-    counter = 0
-
-    #loop through each row
-
-    for(i in 1:nrow(fg_w_yes)){
-      #this is now quite simple- if there are any start or end times within the fg row, call it yes, otherwise spit out no.
-
-      if(format ==db){
-        st = fg_w_yes$seg_start[i]
-        et =fg_w_yes$seg_end[i]
-      }else if(format=='DETx'){
-        st = fg_w_yes$SegStart[i]
-        et =fg_w_yes$SegStart[i]+fg_w_yes$SegDur[i]
-      }
-
-      endtimes = data[which(data[,ef_col]==fg_w_yes[,fgfn][i] & ((data[,et_col]<et) & (data[,et_col]>st))),"EndTime"]
-      starttimes = data[which(data[,sf_col]==fg_w_yes[,fgfn][i] & ((data[,st_col]<et) & (data[,st_col]>st))),"StartTime"]
-
-      if(length(endtimes)==0 & length(starttimes)==0){
-        #no detection, so bin is a pn
-        counter = counter + 1
-
-
-        if(format=='DETx'){
-          rows[[i]] = c(st,et,0,highfreq,fg_w_yes[,fgfn],fg_w_yes[,fgfn],NA,highfreq,'pn',"",data$SignalCode[1],"DET",9999,analyst)
-
-        }else if(format=='db'){
-          rows[[i]] = c(st,et,0,highfreq,fg_w_yes[,fgfn],fg_w_yes[,fgfn],NA,"",procedure,no_2,signal_code,2,analyst)
-
-        }
-
-
-      }
-    }
-
-
-    if(length(rows)>0){
-      rows = do.call('rbind',rows)
-      if(format=='DETx'){
-        colnames(rows)=colnames(data)
-      }else if(format=='db'){
-        colnames(rows)=c("start_time","end_time","low_freq","high_freq","start_file","end_file",
-                                  "probability","comments","procedure","label","signal_code","strength","analyst")[-colind_remove]
-      }
-      out_negs[[2]] = rows
-
-    }
-  }
-
-  return(do.call("rbind",out_negs))
-
-
-}
 
 dbGet <-function(x){
   x = gsub("[\r\n]", "", x)
@@ -2240,13 +1990,19 @@ eZ1$end_file =27234
 
 #so, next step is to see if I can make a query for these. but, currently locked out of the VM
 
+#hard to say what to do. For M2 2009, data are not matching up with the labels. Continue to investigate?
+#checking- is any data from M2 2009 correct?
+
 
 #in the meantime- I can use the output of the original query for mooring completeness to assess progress for a given
+
+#what about - is there a query which can provide a graphical look at moorings which have or have not been run for a procedure?
+
 
 procedure_prog = function(conn,procedure_ids){
 
   bins_w_analysis = paste("SELECT COUNT(*),subquery.name FROM (SELECT DISTINCT ON (bins.id) COUNT(*),data_collection.name FROM detections JOIN bins_detections ON bins_detections.detections_id = detections.id JOIN bins ON bins.id = bins_detections.bins_id
- JOIN soundfiles ON bins.soundfiles_id = soundfiles.id JOIN data_collection ON data_collection.id = soundfiles.data_collection_id WHERE bins.type = 1 AND detections.label IN (1,20) AND detections.procedure IN (",paste(procedure_id,collapse=",",sep=""),") GROUP BY bins.id,data_collection.name) AS subquery GROUP BY subquery.name",sep='')
+ JOIN soundfiles ON bins.soundfiles_id = soundfiles.id JOIN data_collection ON data_collection.id = soundfiles.data_collection_id WHERE bins.type = 1 AND detections.label IN (1,20) AND detections.procedure IN (",paste(procedure_ids,collapse=",",sep=""),") GROUP BY bins.id,data_collection.name) AS subquery GROUP BY subquery.name",sep='')
 
   bins_w_analysis_out = dbFetch(dbSendQuery(conn,bins_w_analysis))
 
@@ -2303,6 +2059,196 @@ soundfiles.data_collection_id WHERE bins.type = 1 GROUP BY data_collection.name,
 }
 
 
-#what about - is there a query which can provide a graphical look at moorings which have or have not been run for a procedure?
 
 
+
+
+
+#redo M2 2009
+
+#first figure out what labels should be deleted.Showing up that there are LM gt labels in there
+whatsthis1 = dbGet("SELECT * FROM detections JOIN soundfiles ON detections.start_file = soundfiles.id WHERE soundfiles.data_collection_id = 144 AND procedure = 10")
+whatsthis2 = dbGet("SELECT * FROM detections WHERE procedure = 10 AND high_freq=53.6")
+
+#also try, see which FG have bins which intersect. Looks like some were introduced from hard negatives... these data look correct,
+#leave them.
+
+#todo: I want to reload the data, and then delete the old data if it is any different.
+
+#way I'm going to do it is query the old (probably worthless) data, save it, and then delete it from db.
+
+#olddat = dbGet("SELECT * FROM detections JOIN soundfiles ON detections.start_file = soundfiles.id WHERE soundfiles.data_collection_id = 144 AND procedure = 5")
+#write.csv(olddat,"BS09_AU_PM02-a_data_temp.csv")
+#out = table_delete(con,'detections',as.integer(olddat$id),hard_delete = TRUE)
+#done!
+
+fg= dbFetch(dbSendQuery(con,paste("SELECT bins.*,soundfiles.name,soundfiles.duration FROM soundfiles JOIN bins ON bins.soundfiles_id = soundfiles.id JOIN data_collection ON soundfiles.data_collection_id = data_collection.id WHERE data_collection.name = 'BS09_AU_PM02-a' AND bins.type = 1",sep="")))
+
+#rav_og_data = read.delim(bb_path)
+
+#put fg in cons order
+
+fg = fg[order(fg$name,fg$seg_start),]
+
+fg$cons = c(0,cumsum(fg$seg_end-fg$seg_start)[1:length(cumsum(fg$seg_end-fg$seg_start))-1])
+
+times=read.csv("//akc0ss-n086/NMML_CAEP_Acoustics/Detector/Combined_sound_files/No_whiten_decimate_by_128/BS09_AU_02a_files_All_SFiles_and_durations.csv")
+
+#use the old time calculation of sfs instead of new- new will propogate differences through file and position labels incorrectly.
+justfiles = fg[-which(duplicated(fg$name)),]
+justfiles$duration = times$Duration
+justfiles$cons =  c(0,cumsum(justfiles$duration[1:length(justfiles$duration)-1]))
+
+path = "//akc0ss-n086/NMML_CAEP_Acoustics/Detector/LFmoan_project/ColeAnalysis/Results/BS09_AU_02a"
+files = c("01BS09_AU_02a_files_All_LM_Model_Applied_probs_Cole_Reviewed.txt",
+          "02BS09_AU_02a_files_All_LM_Model_Applied_probs_Cole_Reviewed.txt",
+          "03BS09_AU_02a_files_All_LM_Model_Applied_probs_Cole_Reviewed.txt",
+          "04BS09_AU_02a_files_All_LM_Model_Applied_probs_Cole_Reviewed.txt")
+coldat = list()
+
+for(i in 1:length(files)){
+
+  coldat[[i]] = read.delim(paste(path,files[i],sep="/"))
+  coldat[[i]] = coldat[[i]][order(coldat[[i]]$Begin.Time..s.),]
+  coldat[[i]]$chunk = i
+}
+
+coldat = do.call('rbind',coldat)
+
+coldat$File_format = paste("AU-BSPM02_a",substr(coldat$File,9,nchar(coldat$File)),sep="")
+
+#get the db sf durations
+coldat$file_dur = fg[match(coldat$File_format,fg$name),"duration"]
+
+
+#ajust the times. found them in SFiles in \\akc0ss-n086\NMML_CAEP_Acoustics\Detector\Combined_sound_files\No_whiten_decimate_by_128, copied by hand.
+coldat[which(coldat$chunk==2),"Begin.Time..s."]= coldat[which(coldat$chunk==2),"Begin.Time..s."] + 4297257.37
+coldat[which(coldat$chunk==3),"Begin.Time..s."]= coldat[which(coldat$chunk==3),"Begin.Time..s."] + 4297257.37 + 4297294.94
+coldat[which(coldat$chunk==4),"Begin.Time..s."]= coldat[which(coldat$chunk==4),"Begin.Time..s."] + 4297257.37 + 4297294.94 +4297273.84
+
+coldat[which(coldat$chunk==2),"End.Time..s."]= coldat[which(coldat$chunk==2),"End.Time..s."] + 4297257.37
+coldat[which(coldat$chunk==3),"End.Time..s."]= coldat[which(coldat$chunk==3),"End.Time..s."] + 4297257.37 + 4297294.94
+coldat[which(coldat$chunk==4),"End.Time..s."]= coldat[which(coldat$chunk==4),"End.Time..s."] + 4297257.37 + 4297294.94 +4297273.84
+
+coldat$dur = coldat$End.Time..s.-coldat$Begin.Time..s.
+
+coldat$start_file = justfiles$soundfiles_id[findInterval(coldat$Begin.Time..s.,justfiles$cons)]
+coldat$end_file = justfiles$soundfiles_id[findInterval(coldat$End.Time..s.,justfiles$cons)]
+
+coldat$Begin.Time..s. = coldat$Begin.Time..s. - justfiles$cons[findInterval(coldat$Begin.Time..s.,justfiles$cons)]
+coldat$End.Time..s. = coldat$End.Time..s. - justfiles$cons[findInterval(coldat$End.Time..s.,justfiles$cons)]
+
+coldat$tempid = 1:nrow(coldat)
+
+#have all the info I need to submit. But, I should put a temp id on these, so I can modify after with the post
+#review changes (Dan files).
+
+template = dbFetch(dbSendQuery(con,'SELECT * FROM detections LIMIT 1'))
+
+input = data.frame(coldat$Begin.Time..s.,coldat$End.Time..s.,coldat$Low.Freq..Hz.,coldat$High.Freq..Hz.,
+                   coldat$start_file,coldat$end_file,coldat$LM.prob,coldat$Comments,5,coldat$Verification,3,2)
+
+colnames(input)=colnames(template)[2:(length(input)+1)]
+
+lab_id = lookup_from_match(con,"label_codes",unique(input$label),"alias")
+input$label = lab_id$id[match(input$label,lab_id$alias)]
+
+#alright, can submit this.
+
+#dbAppendTable(con,'detections',input)
+
+#alright, do the same for 'dan' detections.
+path = "//akc0ss-n086/NMML_CAEP_Acoustics/Detector/LFmoan_project/ColeAnalysis/Results/BS09_AU_02a"
+files = c("01BS09_AU_02a_files_All_LM_Model_Applied_probs_Cole_Reviewed_Dan_Reviewed.txt",
+          "02BS09_AU_02a_files_All_LM_Model_Applied_probs_Cole_Reviewed_Dan_Reviewed.txt",
+          "03BS09_AU_02a_files_All_LM_Model_Applied_probs_Cole_Reviewed_Dan_Reviewed.txt",
+          "04BS09_AU_02a_files_All_LM_Model_Applied_probs_Cole_Reviewed_Dan_Reviewed.txt")
+dandat = list()
+
+for(i in 1:length(files)){
+
+  dandat[[i]] = read.delim(paste(path,files[i],sep="/"))
+  dandat[[i]] = dandat[[i]][order(dandat[[i]]$Begin.Time..s.),]
+  dandat[[i]]$chunk = i
+}
+
+dandat = do.call('rbind',dandat)
+
+dandat$File_format = paste("AU-BSPM02_a",substr(dandat$File,9,nchar(dandat$File)),sep="")
+
+#get the db sf durations
+dandat$file_dur = fg[match(dandat$File_format,fg$name),"duration"]
+
+#do manually
+#times=read.csv("//akc0ss-n086/NMML_CAEP_Acoustics/Detector/Combined_sound_files/No_whiten_decimate_by_128/BS09_AU_02a_files_All_SFiles_and_durations.csv")
+dandat[which(dandat$chunk==2),"Begin.Time..s."]= dandat[which(dandat$chunk==2),"Begin.Time..s."] + 4297257.37
+dandat[which(dandat$chunk==3),"Begin.Time..s."]= dandat[which(dandat$chunk==3),"Begin.Time..s."] + 4297257.37 + 4297294.94
+dandat[which(dandat$chunk==4),"Begin.Time..s."]= dandat[which(dandat$chunk==4),"Begin.Time..s."] + 4297257.37 + 4297294.94 +4297273.84
+
+dandat[which(dandat$chunk==2),"End.Time..s."]= dandat[which(dandat$chunk==2),"End.Time..s."] + 4297257.37
+dandat[which(dandat$chunk==3),"End.Time..s."]= dandat[which(dandat$chunk==3),"End.Time..s."] + 4297257.37 + 4297294.94
+dandat[which(dandat$chunk==4),"End.Time..s."]= dandat[which(dandat$chunk==4),"End.Time..s."] + 4297257.37 + 4297294.94 +4297273.84
+
+
+dandat$dur = dandat$End.Time..s.-dandat$Begin.Time..s.
+
+dandat$start_file = justfiles$soundfiles_id[findInterval(dandat$Begin.Time..s.,justfiles$cons)]
+dandat$end_file = justfiles$soundfiles_id[findInterval(dandat$End.Time..s.,justfiles$cons)]
+
+dandat$Begin.Time..s. = dandat$Begin.Time..s. - justfiles$cons[findInterval(dandat$Begin.Time..s.,justfiles$cons)]
+dandat$End.Time..s. = dandat$End.Time..s. - justfiles$cons[findInterval(dandat$End.Time..s.,justfiles$cons)]
+
+onlydiff = dandat[-which(paste(dandat$Begin.Time..s.,dandat$End.Time..s.,dandat$start_file,dandat$Verification) %in%
+                                 paste(coldat$Begin.Time..s.,coldat$End.Time..s.,coldat$start_file,coldat$Verification)),]
+
+onlydiff$procedure = 5
+
+onlydiff = data.frame(onlydiff$Begin.Time..s.,onlydiff$End.Time..s.,onlydiff$Low.Freq..Hz.,onlydiff$High.Freq..Hz.,
+                      onlydiff$start_file,onlydiff$end_file,onlydiff$LM.prob,onlydiff$Comments,5,onlydiff$Verification,3,2)
+
+colnames(onlydiff)=colnames(template)[2:(length(onlydiff)+1)]
+#for onlydiff, pull out of db to get ids
+
+onlydiff$start_file = as.integer(onlydiff$start_file)
+onlydiff$end_file = as.integer(onlydiff$end_file)
+
+w_ids = table_dataset_lookup(con,"SELECT * FROM detections",onlydiff[,c(1,2,5,6,7,9)],
+                             c("DOUBLE PRECISION","DOUBLE PRECISION","integer","integer","DOUBLE PRECISION","integer"))
+
+w_ids = w_ids[order(w_ids$start_time),]
+onlydiff = onlydiff[order(onlydiff$start_time),]
+
+#now they match= cbind ids, and update verification.
+
+ds = data.frame(w_ids$id,onlydiff$label)
+
+colnames(ds)=c("id","label")
+
+ds$label = lab_id$id[match(ds$label,lab_id$alias)]
+
+#table_update(con,'detections',ds)
+
+#now need to add bin labels.
+
+#checked the signal and labels, labels get progressively more wrong as file continues indicating probably rounding problem.
+#idea- delete on db and recalcualte. Instead of adding flat sum, add an incrementing difference that is = to the total dur
+#minus the floor, and subtract that from the signal.
+
+#ended up working close enough to just use the sfiles times, which are close enough with occasional hundreds place round diff.
+
+#now get all the dets and calc bin labels.
+
+data = dbGet("SELECT detections.* FROM detections JOIN soundfiles ON detections.start_file = soundfiles.id WHERE soundfiles.data_collection_id = 144 AND procedure = 5 AND status = 1")
+
+data$start_file = as.integer(data$start_file)
+data$end_file = as.integer(data$end_file)
+
+fg= dbFetch(dbSendQuery(con,paste("SELECT bins.*,soundfiles.name,soundfiles.duration FROM soundfiles JOIN bins ON bins.soundfiles_id = soundfiles.id JOIN data_collection ON soundfiles.data_collection_id = data_collection.id WHERE data_collection.name = 'BS09_AU_PM02-a' AND bins.type = 1",sep="")))
+fg$soundfiles_id = as.integer(fg$soundfiles_id)
+fg$id = as.integer(fg$id)
+
+
+bins = bin_negatives(data,fg,bintype="LOW",analyst='previous',procedure = 5,signal_code =3,format='db')
+#dbAppendTable(con,'detections',bins)
+
+#looks ok!
