@@ -261,8 +261,8 @@ bin_negatives<-function(data,FG,bintype,analyst='previous',procedure = NULL,sign
         et =fg_w_yes$SegStart[i]+fg_w_yes$SegDur[i]
       }
 
-      endtimes = data[which(data[,ef_col]==fg_w_yes[,fgfn][i] & ((data[,et_col]<et) & (data[,et_col]>st))),"EndTime"]
-      starttimes = data[which(data[,sf_col]==fg_w_yes[,fgfn][i] & ((data[,st_col]<et) & (data[,st_col]>st))),"StartTime"]
+      endtimes = data[which(data[,ef_col]==fg_w_yes[,fgfn][i] & ((data[,et_col]<et) & (data[,et_col]>st))),et_col]
+      starttimes = data[which(data[,sf_col]==fg_w_yes[,fgfn][i] & ((data[,st_col]<et) & (data[,st_col]>st))),st_col]
 
       if(length(endtimes)==0 & length(starttimes)==0){
         #no detection, so bin is a pn

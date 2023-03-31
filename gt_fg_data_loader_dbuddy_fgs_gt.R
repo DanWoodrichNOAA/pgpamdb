@@ -1998,6 +1998,11 @@ eZ1$end_file =27234
 
 #what about - is there a query which can provide a graphical look at moorings which have or have not been run for a procedure?
 
+#now, want to also expand this to look at analysis. How do I want this to behave? For an analysis, it is probably also
+#useful to see which moorings have been run for different analyses.
+
+#also, this should export the table as a retrievable object as well, so can refer to the mooring names.
+
 
 procedure_prog = function(conn,procedure_ids){
 
@@ -2036,7 +2041,9 @@ soundfiles.data_collection_id WHERE bins.type = 1 GROUP BY data_collection.name,
 
   }
 
-  out = ggplot(comp, aes(xmin = min, xmax = max,ymin = ymin, ymax = ymin+1, fill = factor(interp))) + geom_rect(color="black") +
+  out = vector("list",2)
+
+  out[[1]] = ggplot(comp, aes(xmin = min, xmax = max,ymin = ymin, ymax = ymin+1, fill = factor(interp))) + geom_rect(color="black") +
     facet_grid(location_code~., switch = "y")+  #opts(axis.text.y = theme_blank(), axis.ticks = theme_blank()) #+ xlim(0,23) + xlab("time of day")
     scale_x_datetime(date_breaks = "6 months" , date_labels = "%m-%y",expand=c(0,0)) +
     #ggtitle(paste(bin_label,"monthly",bt_str,"bin % presence")) +
@@ -2054,6 +2061,9 @@ soundfiles.data_collection_id WHERE bins.type = 1 GROUP BY data_collection.name,
           strip.background = element_rect(colour=NA, fill=NA))+
     theme(axis.text.x = element_text(angle = 45, hjust = 1)) #+
     #labs(fill = "% presence")
+
+  out[[2]] = comp
+
   return(out)
 
 }
@@ -2238,7 +2248,7 @@ ds$label = lab_id$id[match(ds$label,lab_id$alias)]
 
 #now get all the dets and calc bin labels.
 
-data = dbGet("SELECT detections.* FROM detections JOIN soundfiles ON detections.start_file = soundfiles.id WHERE soundfiles.data_collection_id = 144 AND procedure = 5 AND status = 1")
+data = dbGet("SELECT detections.* FROM detections JOIN soundfiles ON detections.start_file = soundfiles.id WHERE soundfiles.data_collection_id = 144 AND procedure = 5 AND label !=20 AND status = 1")
 
 data$start_file = as.integer(data$start_file)
 data$end_file = as.integer(data$end_file)
@@ -2247,8 +2257,42 @@ fg= dbFetch(dbSendQuery(con,paste("SELECT bins.*,soundfiles.name,soundfiles.dura
 fg$soundfiles_id = as.integer(fg$soundfiles_id)
 fg$id = as.integer(fg$id)
 
-
+#this fxn might be bugged! It output bins which overlapped with yes detections in a seperate test, need to
+#double check and if needed correct.
 bins = bin_negatives(data,fg,bintype="LOW",analyst='previous',procedure = 5,signal_code =3,format='db')
+
+#test to see if it worked
+#View(bins[which(bins$start_file %in% data[which(data$label==1),"start_file"]),])
+
+#looks ok.
+
 #dbAppendTable(con,'detections',bins)
 
-#looks ok!
+#test- load in all detections that match a bin from a detection in the above.
+test = dbGet("SELECT * FROM detections JOIN bins_detections ON detections.id = bins_detections.detections_id JOIN bins ON bins.id =
+       bins_detections.bins_id WHERE bins_id IN (SELECT bins.id FROM detections JOIN soundfiles ON detections.start_file = soundfiles.id JOIN bins_detections ON detections.id = bins_detections.detections_id JOIN bins ON bins.id =
+       bins_detections.bins_id WHERE soundfiles.data_collection_id = 144 AND procedure = 5 AND label =1 AND status = 1 LIMIT 3) AND procedure = 5")
+
+#interestingly, a lot of conflicts. I wonder how much is from different deployments vs incorrect bin labels.
+testconflicts = dbGet("SELECT COUNT(*),soundfiles.data_collection_id FROM bin_label_wide JOIN bins ON bin_label_wide.id = bins.id JOIN soundfiles ON bins.soundfiles_id = soundfiles.id WHERE lm = 98 GROUP BY soundfiles.data_collection_id")
+
+#take a look at the worst offender
+#yep, got good coverage from several analyses, which is the problem and fine. It does look like bin labels were correct for this one!
+conf164= dbGet("SELECT * FROM detections JOIN soundfiles ON detections.start_file = soundfiles.id WHERE soundfiles.data_collection_id = 164 AND signal_code = 3")
+
+#does appear as though it's wrong. Scrap these detections, and bugfix the bin_negatives fxn.
+del_ids = dbGet("SELECT detections.id FROM detections JOIN soundfiles ON detections.start_file = soundfiles.id WHERE soundfiles.data_collection_id = 144 AND procedure = 5")
+
+#out = table_delete(con,'detections',as.integer(del_ids$id),hard_delete = TRUE)
+
+
+#some data checking- see where labels for new lm detector 23 exist:
+
+#dbGet("SELECT COUNT(*),label,status,modified,data_collection.name,data_collection.sampling_rate FROM detections JOIN soundfiles ON detections.start_file = soundfiles.id JOIN data_collection ON data_collection.id = soundfiles.data_collection_id WHERE procedure = 23 GROUP BY label,modified,status,data_collection.name,data_collection.sampling_rate")
+
+#data cleaning- remove unreviewed labels from several moorings which were not uploaded correctly.
+
+#get ids to remove:
+#ids_del = dbGet("SELECT id FROM detections WHERE date_trunc('seconds', modified) = '2023-03-25 09:25:17'")
+
+#table_delete(con,"detections",as.integer(ids_del$id),hard_delete = TRUE)
