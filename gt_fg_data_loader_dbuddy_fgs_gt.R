@@ -2290,9 +2290,44 @@ del_ids = dbGet("SELECT detections.id FROM detections JOIN soundfiles ON detecti
 
 #dbGet("SELECT COUNT(*),label,status,modified,data_collection.name,data_collection.sampling_rate FROM detections JOIN soundfiles ON detections.start_file = soundfiles.id JOIN data_collection ON data_collection.id = soundfiles.data_collection_id WHERE procedure = 23 GROUP BY label,modified,status,data_collection.name,data_collection.sampling_rate")
 
+#vers of this without grouping by modified:
+
+#dbGet("SELECT COUNT(*),label,status,data_collection.name,data_collection.sampling_rate FROM detections JOIN soundfiles ON detections.start_file = soundfiles.id JOIN data_collection ON data_collection.id = soundfiles.data_collection_id WHERE procedure = 23 GROUP BY label,status,data_collection.name,data_collection.sampling_rate")
+
 #data cleaning- remove unreviewed labels from several moorings which were not uploaded correctly.
 
 #get ids to remove:
 #ids_del = dbGet("SELECT id FROM detections WHERE date_trunc('seconds', modified) = '2023-03-25 09:25:17'")
 
 #table_delete(con,"detections",as.integer(ids_del$id),hard_delete = TRUE)
+
+#need to do an operation, before fixing the behavior in scorestodetx where I correct the detections that have a
+#end at 0 to ending at the duration of the previous file. Also, I should check that this hasn't had odd behaviors
+#on bin negatives.
+
+#dbGet("DELETE FROM soundfiles WHERE id = 3064470")
+
+#one question- how much does lm procedure 23 reduce the analysis effort?
+
+#lab99s = dbGet("SELECT COUNT(DISTINCT bins.*),data_collection.name FROM bins JOIN soundfiles ON bins.soundfiles_id = soundfiles.id JOIN
+# data_collection ON data_collection.id = soundfiles.data_collection_id JOIN bins_detections ON bins_detections.bins_id =
+#               bins.id JOIN detections ON detections.id = bins_detections.detections_id WHERE bins.type = 1 AND detections.procedure = 23 AND detections.label = 99 GROUP BY data_collection.name")
+
+#now compare this to the effort of these same detections
+
+#allbins = dbGet("SELECT COUNT(*),data_collection.name FROM bins JOIN soundfiles ON bins.soundfiles_id = soundfiles.id JOIN data_collection
+#                 ON data_collection.id = soundfiles.data_collection_id WHERE type = 1 GROUP BY data_collection.name")
+
+#compare = merge(lab99s,allbins,all.x = TRUE,by='name')
+
+#use object I got from procedure_prog to only use unanalyzed moorings.
+#compare$rev_perc = compare$count.x/compare$count.y
+
+#get detections from 23 which have an end time of 0
+
+dets_to_cor = dbGet("SELECT * FROM detections WHERE end_time = 0 AND procedure = 23")
+#Do I care, really? Or could I just have a parameter in ravenviewdetx which excludes detections which overlap effort
+#vs are strictly within effort?
+
+#yeah, not sure it is even worth addressing right now. Today, I think I should try to get the capability to edit
+#detection

@@ -1118,9 +1118,9 @@ table_delete <-function(conn,tablename,ids,idname = 'id',hard_delete=FALSE){
 
     }
 
-    out = dbExecute(conn,query)
-
   }
+
+    out = dbExecute(conn,query)
 
   })
 
@@ -1378,20 +1378,36 @@ bin_label_explore<-function(conn,bin_label,inst_source='AFSC',plot_sds = 4,bin_t
     #bound the approximate region to get rid of the GR and other non-region AFSC data.
     long_min = -185
     long_max = -140
+
+    #moved this up here, so that query will not reject sites without precise latlong info. Will pull all of the averages
+    #for each site, then restrict by site in below query, not by
+
+    query_ = "SELECT AVG(latitude) as avg_lat,AVG(longitude) as avg_long,location_code FROM data_collection GROUP BY location_code"
+
+    avg_latlongs = dbFetch(dbSendQuery(conn,gsub("[\r\n]", "", query_)))
+
+    avg_latlongs = avg_latlongs[which(!is.na(avg_latlongs$avg_lat)),]
+
+    in_bounds_loc_codes = avg_latlongs[which(avg_latlongs$avg_long > long_min & avg_latlongs$avg_long < long_max),]
+
   }
 
   query = paste("SELECT ",bin_label,",count(*),date_trunc('month', soundfiles.datetime) AS dt_,data_collection.name,data_collection.location_code,data_collection.latitude
                 FROM bin_label_wide JOIN bins ON bins.id = bin_label_wide.id JOIN soundfiles ON bins.soundfiles_id = soundfiles.id JOIN data_collection ON data_collection.id = soundfiles.data_collection_id
-                WHERE bins.type = ",bin_type," AND data_collection.institution_source = '",inst_source,"' AND data_collection.longitude < ",long_max," AND data_collection.longitude > ",long_min,
-                " GROUP BY ",bin_label,",dt_,data_collection.name,data_collection.location_code,data_collection.latitude",sep="")
+                WHERE bins.type = ",bin_type," AND data_collection.institution_source = '",inst_source,"' AND data_collection.location_code IN ('",paste(unique(in_bounds_loc_codes$location_code),sep="",collapse="','"),"')
+                 GROUP BY ",bin_label,",dt_,data_collection.name,data_collection.location_code,data_collection.latitude",sep="")
 
   output = dbFetch(dbSendQuery(conn,gsub("[\r\n]", "", query)))
-
-  #cool, we've got it
 
   #avg_lat for site
   avg_lat = aggregate(output$latitude, list(output$location_code), FUN=function(x) mean(x,na.rm=TRUE))
   colnames(avg_lat)=c("Site","Lat")
+
+  #fill in the avg lat if missing
+
+  if(any(is.na(output$latitude))){
+    output$latitude[which(is.na(output$latitude))] = avg_lat$Lat[match(output$location_code[which(is.na(output$latitude))],avg_lat$Site)]
+  }
 
   #combine output table so that 1/21 and 0/20 are combined, and 99s are distinct
 
@@ -1503,6 +1519,27 @@ add_layer_ble<-function(conn,signal_code,procedure,color,fgnames=c(),inst_source
   WHERE detections.signal_code = ",signal_code," AND detections.procedure = ",procedure," AND data_collection.institution_source = '",inst_source,"' ",add_fgnames," GROUP BY mm_yy,data_collection.name,data_collection.location_code,data_collection.latitude",sep="")
 
   query_layer_out = dbFetch(dbSendQuery(conn,gsub("[\r\n]", "", query_layer)))
+
+  #if missing location code, return error
+  if(any(is.na(query_layer_out$location_code))){
+    stop(paste("location code missing for portion of effort in data collection:",unique(query_layer_out[which(is.na(query_layer_out$location_code)),"name"])))
+  }
+
+  #if missing latitude, query based on avg of location code.
+  if(any(is.na(query_layer_out$latitude))){
+
+    location_codes = unique(query_layer_out[which(is.na(query_layer_out$latitude)),"location_code"])
+
+    avg_lats = dbFetch(dbSendQuery(conn,paste("SELECT AVG(latitude),location_code FROM data_collection WHERE location_code IN ('",paste(location_codes,collapse="','",sep=""),
+                                          "') GROUP BY location_code",sep="")))
+
+    for(i in 1:length(location_codes)){
+
+      query_layer_out[which(is.na(query_layer_out$latitude & query_layer_out$location_code ==location_codes[i])),"latitude"] = avg_lats$avg[which(avg_lats$location_code==location_codes[i])]
+
+    }
+
+  }
 
   return(geom_point(data=query_layer_out, aes(x=mm_yy, y=location_code,z=NULL), fill = color, colour = 'black',pch=21,size =3))
 
