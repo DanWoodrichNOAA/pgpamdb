@@ -2007,7 +2007,7 @@ eZ1$end_file =27234
 procedure_prog = function(conn,procedure_ids){
 
   bins_w_analysis = paste("SELECT COUNT(*),subquery.name FROM (SELECT DISTINCT ON (bins.id) COUNT(*),data_collection.name FROM detections JOIN bins_detections ON bins_detections.detections_id = detections.id JOIN bins ON bins.id = bins_detections.bins_id
- JOIN soundfiles ON bins.soundfiles_id = soundfiles.id JOIN data_collection ON data_collection.id = soundfiles.data_collection_id WHERE bins.type = 1 AND detections.label IN (1,20) AND detections.procedure IN (",paste(procedure_ids,collapse=",",sep=""),") GROUP BY bins.id,data_collection.name) AS subquery GROUP BY subquery.name",sep='')
+ JOIN soundfiles ON bins.soundfiles_id = soundfiles.id JOIN data_collection ON data_collection.id = soundfiles.data_collection_id WHERE bins.type = 1 AND detections.label IN (1,20,21) AND detections.procedure IN (",paste(procedure_ids,collapse=",",sep=""),") GROUP BY bins.id,data_collection.name) AS subquery GROUP BY subquery.name",sep='')
 
   bins_w_analysis_out = dbFetch(dbSendQuery(conn,bins_w_analysis))
 
@@ -2026,8 +2026,8 @@ soundfiles.data_collection_id WHERE bins.type = 1 GROUP BY data_collection.name,
 
 
   comp$interp = "unanalyzed"
-  comp$interp[which(comp$perc==1)]= "analyzed"
-  comp$interp[which(comp$perc!=1)]= "partially analyzed"
+  comp$interp[which(comp$perc>0.99)]= "analyzed" #small allowance for errors.
+  comp$interp[which(comp$perc<=0.99)]= "partially analyzed"
   #add a 'ymin' column to comp, depending on if it overlaps within same
 
   #really, should return plot of moorings run and moorings to go

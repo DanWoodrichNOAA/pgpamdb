@@ -948,11 +948,6 @@ table_update <-function(conn,tablename,dataset,colvector=NULL,idname = 'id'){
 
   dtquery <- gsub("[\r\n]", " ", dtquery)
 
-  #single transaction.
-  dbBegin(conn)
-
-  try({
-
   #get data types
   dtypes = dbFetch(dbSendQuery(conn,dtquery))
 
@@ -965,7 +960,7 @@ table_update <-function(conn,tablename,dataset,colvector=NULL,idname = 'id'){
   #to only the modified data.
 
   existingdata = dbFetch(dbSendQuery(conn,paste("SELECT",paste(colvector_wid,collapse = ",",sep=""),"FROM",
-                                        tablename,"WHERE",idname,"IN (",paste(dataset$id,collapse=","),");")))
+                                        tablename,"WHERE",idname,"IN (",paste(dataset[,idname],collapse=","),");")))
 
   for(i in 1:length(existingdata)){
     if(class(existingdata[,i])=="integer64"){
@@ -975,18 +970,35 @@ table_update <-function(conn,tablename,dataset,colvector=NULL,idname = 'id'){
 
   comb_data <- merge(existingdata, dataset,by=colvector_wid, all=TRUE)
 
-  delta_ids = comb_data$id[which(duplicated(comb_data$id))]
+  delta_ids = comb_data[,idname][which(duplicated(comb_data[,idname]))]
 
   if(length(delta_ids)>0 & length(delta_ids)<nrow(dataset)){
 
     warning("Some identical rows to database copy provided in dataset. Only updating changed rows.")
 
-    dataset = dataset[which(dataset$id %in% delta_ids),]
+    dataset = dataset[which(dataset[,idname] %in% delta_ids),]
 
   }else if(length(delta_ids)==0){
 
     stop("Error: no changes detected in the provided dataset compared to database copy. Terminating")
   }
+
+  #convert any posixct date types into character prior to serialization (otherwise they get changed to
+  #numeric by R)
+
+  for(i in 1:length(dataset)){
+    if(class(dataset[,i])=="POSIXct"){
+      dataset[,i] = format(dataset[,i],"%Y-%m-%d %H:%M:%S%z")
+    }
+  }
+
+  if(length(delta_ids)<1000){
+
+  #single transaction.
+  dbBegin(conn)
+
+  try({
+
 
   #serialize dataset and construct query.
   #first part of query
@@ -1057,6 +1069,39 @@ table_update <-function(conn,tablename,dataset,colvector=NULL,idname = 'id'){
   })
 
   dbCommit(conn)
+
+  }else{ #rows are >1000- update doesn't perform well, so do delete + insert.
+
+    #pull full dataset
+
+    existingdata2 = dbFetch(dbSendQuery(conn,paste("SELECT * FROM",
+                                                  tablename,"WHERE",idname,"IN (",paste(dataset[,idname],collapse=","),");")))
+    for(i in 1:length(existingdata2)){
+      if(class(existingdata2[,i])=="integer64"){
+        existingdata2[,i]=as.integer(existingdata2[,i])
+      }
+    }
+
+    for(i in 1:length(existingdata2)){
+      if(class(existingdata2[,i])=="POSIXct"){
+        existingdata2[,i] = format(existingdata2[,i],"%Y-%m-%d %H:%M:%S%z")
+      }
+    }
+
+    existingdata2 = existingdata2[order(existingdata2[,idname]),]
+    dataset = dataset[order(dataset[,idname]),]
+
+    #delete data (soft delete in detection case)
+    table_delete(con,tablename,dataset[,idname],idname)
+
+    for(i in 1:length(colvector)){
+      existingdata2[,colvector[i]]=dataset[,colvector[i]]
+    }
+
+      #insert data. specify ids = original ids and include both in insert.
+    dbAppendTable(con,'detections',existingdata2)
+
+  }
 
 }
 
@@ -1542,6 +1587,78 @@ add_layer_ble<-function(conn,signal_code,procedure,color,fgnames=c(),inst_source
   }
 
   return(geom_point(data=query_layer_out, aes(x=mm_yy, y=location_code,z=NULL), fill = color, colour = 'black',pch=21,size =3))
+
+}
+
+#' Add a layer to bin label explore plot
+#'
+#' Add a layer to a bin label explore plot. No easy way to include legend, use for quick comparisons.
+#' @param conn The database connection
+#' @param procedure integer id for procedure. multiple can be specified c(1,2,3). see db for code ref
+#' @return ggplot plot in first index and numeric underlying data in 2nd index
+#' @export
+#'
+procedure_prog = function(conn,procedure_ids){
+
+  bins_w_analysis = paste("SELECT COUNT(*),subquery.name FROM (SELECT DISTINCT ON (bins.id) COUNT(*),data_collection.name FROM detections JOIN bins_detections ON bins_detections.detections_id = detections.id JOIN bins ON bins.id = bins_detections.bins_id
+ JOIN soundfiles ON bins.soundfiles_id = soundfiles.id JOIN data_collection ON data_collection.id = soundfiles.data_collection_id WHERE bins.type = 1 AND detections.label IN (1,20,21) AND detections.procedure IN (",paste(procedure_ids,collapse=",",sep=""),") GROUP BY bins.id,data_collection.name) AS subquery GROUP BY subquery.name",sep='')
+
+  bins_w_analysis_out = dbFetch(dbSendQuery(conn,bins_w_analysis))
+
+  allbins = "SELECT COUNT(*),data_collection.name,MIN(soundfiles.datetime),MAX(soundfiles.datetime),location_code,latitude FROM bins JOIN soundfiles ON bins.soundfiles_id = soundfiles.id JOIN data_collection ON data_collection.id =
+soundfiles.data_collection_id WHERE bins.type = 1 GROUP BY data_collection.name,location_code,latitude"
+
+  bins_all = dbFetch(dbSendQuery(conn,allbins))
+
+  comp = merge(bins_w_analysis_out,bins_all,by="name",all.y = TRUE)
+
+  comp$perc = comp$count.x/comp$count.y
+
+  latlookup = aggregate(comp,list(comp$location_code),function(x) mean(x,na.rm=TRUE))
+
+  comp$location_code =factor(comp$location_code,level = rev(latlookup$Group.1[order(latlookup$latitude)]))
+
+
+  comp$interp = "unanalyzed"
+  comp$interp[which(comp$perc>0.99)]= "analyzed" #small allowance for errors.
+  comp$interp[which(comp$perc<=0.99)]= "partially analyzed"
+  #add a 'ymin' column to comp, depending on if it overlaps within same
+
+  #really, should return plot of moorings run and moorings to go
+  #ymin = ymin, ymax = ymin + 1,
+
+  comp$ymin = 0
+
+  if(any(is.na(comp$location_code))){
+
+    comp=comp[-which(is.na(comp$location_code)),]
+
+  }
+
+  out = vector("list",2)
+
+  out[[1]] = ggplot(comp, aes(xmin = min, xmax = max,ymin = ymin, ymax = ymin+1, fill = factor(interp))) + geom_rect(color="black") +
+    facet_grid(location_code~., switch = "y")+  #opts(axis.text.y = theme_blank(), axis.ticks = theme_blank()) #+ xlim(0,23) + xlab("time of day")
+    scale_x_datetime(date_breaks = "6 months" , date_labels = "%m-%y",expand=c(0,0)) +
+    #ggtitle(paste(bin_label,"monthly",bt_str,"bin % presence")) +
+    theme_bw() +
+    theme(legend.title = element_text(size=12),
+          legend.text = element_text(size=12),
+          strip.text.y.left = element_text(angle = 0, face = "bold")) +
+    theme(axis.text = element_text(size=12),
+          axis.title.y = element_blank(),
+          axis.text.y = element_blank(),
+          axis.ticks = element_blank(),
+          panel.grid.minor = element_blank(),
+          panel.grid.major = element_blank(),
+          panel.border = element_blank(),
+          strip.background = element_rect(colour=NA, fill=NA))+
+    theme(axis.text.x = element_text(angle = 45, hjust = 1)) #+
+  #labs(fill = "% presence")
+
+  out[[2]] = comp
+
+  return(out)
 
 }
 

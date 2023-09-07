@@ -13,6 +13,7 @@ dbGet <-function(x){
 
 library(RPostgres)
 library(ggplot2)
+library(dplyr)
 
 #setwd("C:/Apps/pgpamdb")
 
@@ -919,3 +920,157 @@ plot(fw_map + fw1 + fw2 + ff1 + sf1 + mf2 + fg4 + fg5 + fg6 )
 #one thing to note- look into bs10_AU_05- did this just not get loaded
 #up to db? not only does it look like it's not loaded up to db, but that
 #the sfs themselves are not uploaded to the db.
+
+
+#need a fxn to explore the 99 detections. I think a generalizable function to generate a plot which shows-
+#1. daily % presence + shade coded detection density
+#2. any number of named mooring deployments
+#3. any number of individual procedures (color coded)
+#4. argument to control uk behavior (turn 99s to 21s for sake of comparison..)
+#5. monthly or daily time scales
+
+deployments = c("AL20_AU_PH01","BS19_AU_PM05","BS20_AU_PM08","BS18_AU_PM02-a","BS18_AU_PM02-b","BS17_AU_PM08")
+deployments = c("BS13_AU_PM02-a")
+procedures = c(6,24)
+bin_type= 1
+timescale = 'month'
+uk_behavior = 'include'
+color_scale = 'log'
+prob_thresh = 0.0
+
+test6= perc_pres(con,deployments,procedures,bin_type,timescale,uk_behavior,color_scale,prob_thresh)
+plot(test6)
+
+#needs
+#deal with overlapping name
+#loop through each procedure to sum total bins (or do in query?)
+perc_pres <- function(conn,deployments,procedures,bin_type,timescale = 'day',uk_behavior = 'ignore',color_scale='none',prob_thresh='off'){
+
+    bt_str = c("LOW","REG","SHI","CUSTOM")[bin_type]
+
+
+    #hardcode in to make sure behavior stays consistent, despite og fin whale data being
+    #loaded in over two procedures (positive and negative as 6,7)
+
+
+
+    if(6 %in% procedures){
+      procedures = c(procedures,7)
+    }
+
+    bt_str = c("LOW","REG","SHI","CUSTOM")[bin_type]
+
+    #query = paste("SELECT procedure, CASE WHEN probability > ",prob_thresh," THEN 'in_prob' WHEN probability IS NULL THEN 'no_prob' END as range, label,count(*),date_trunc('",timescale,"', soundfiles.datetime) AS dt_,data_collection.name,data_collection.location_code,data_collection.latitude
+    #            FROM detections JOIN bins_detections ON bins_detections.detections_id = detections.id JOIN bins ON bins_detections.bins_id = bins.id
+    #            JOIN soundfiles ON bins.soundfiles_id = soundfiles.id JOIN data_collection ON data_collection.id = soundfiles.data_collection_id
+    #            WHERE bins.type = ",bin_type," AND data_collection.name IN ('",paste(deployments,collapse="','",sep=""),"') AND detections.procedure IN (",paste(procedures,collapse=",",sep=""),")
+    #             GROUP BY procedure,range,label,dt_,data_collection.name,data_collection.location_code,data_collection.latitude",sep="")
+
+    if(uk_behavior=='ignore'){
+      label_behavior = "CASE WHEN label IN (21,1) THEN 1 WHEN label IN (20,0) THEN 0 END as label_"
+    }else if(uk_behavior == 'include'){
+      label_behavior = "CASE WHEN label IN (21,1,99) THEN 1 WHEN label IN (20,0) THEN 0 END as label_"
+    }
+
+
+    #need to check- do I need to add special CASE behavior for 6,7 procedures?
+
+    query = paste("SELECT procedure, CASE WHEN probability >= ",prob_thresh," THEN 'in_prob' WHEN probability < ",prob_thresh," THEN 'out_prob' WHEN probability IS NULL THEN 'no_prob' END as range,count(DISTINCT bins.id) AS unq_bins,",label_behavior,",count(*),date_trunc('",timescale,"', soundfiles.datetime) AS dt_,data_collection.location_code,data_collection.latitude
+                FROM detections JOIN bins_detections ON bins_detections.detections_id = detections.id JOIN bins ON bins_detections.bins_id = bins.id
+                JOIN soundfiles ON bins.soundfiles_id = soundfiles.id JOIN data_collection ON data_collection.id = soundfiles.data_collection_id
+                WHERE (probability >= ",prob_thresh," OR probability IS NULL) AND bins.type = ",bin_type," AND data_collection.name IN ('",paste(deployments,collapse="','",sep=""),"') AND detections.procedure IN (",paste(procedures,collapse=",",sep=""),") AND detections.status = 1
+                 GROUP BY procedure,range,label_,dt_,data_collection.location_code,data_collection.latitude",sep="")
+
+    output = dbFetch(dbSendQuery(conn,gsub("[\r\n]", "", query)))
+
+    #don't need this anymore
+    output$range = NULL
+
+    colnames(output)[which(colnames(output)=="label_")] = 'label'
+
+    if(any(is.na(output$label))){
+      output = output[-which(is.na(output$label)),]
+    }
+
+    output_mod = output
+    #output_mod$name = NULL
+
+    if(6 %in% procedures){
+      om7 = output_mod[which(output_mod$procedure==7),]
+      om6 = output_mod[which(output_mod$procedure==6),]
+
+      colnames(om7)[which(colnames(om7)=="unq_bins")]="unq_bins7"
+
+      om7$procedure = 6
+      om7$count = NULL
+
+      om_temp = merge(om6,om7,all=TRUE)
+
+      om_temp$unq_bins[which(is.na(om_temp$unq_bins))]=0
+      om_temp$unq_bins7[which(is.na(om_temp$unq_bins7))]=0
+
+      om_temp$unq_bins= om_temp$unq_bins+om_temp$unq_bins7
+      om_temp$unq_bins7=NULL
+
+      output_mod = output_mod[-which(output_mod$procedure %in% c(6,7)),]
+      output_mod =rbind(output_mod,om_temp)
+    }
+
+    output_mod$count= as.integer(output_mod$count)
+
+    #query2 = paste("SELECT count(*) as eff_count,date_trunc('",timescale,"', soundfiles.datetime)AS dt_,data_collection.name,data_collection.location_code,data_collection.latitude
+    # FROM bins JOIN soundfiles ON bins.soundfiles_id = soundfiles.id JOIN data_collection ON soundfiles.data_collection_id = data_collection.id
+    # WHERE bins.type = ",bin_type," AND data_collection.name IN ('",paste(deployments,collapse="','",sep=""),"')
+    # GROUP BY dt_,data_collection.name,data_collection.location_code,data_collection.latitude",sep="")
+
+    #bins_in_ts = dbFetch(dbSendQuery(conn,gsub("[\r\n]", "", query2)))
+
+    #bins_in_ts$eff_count= as.integer(bins_in_ts$eff_count)
+
+    #comb= merge(output_mod,bins_in_ts, all.y = TRUE)
+
+    eff_table = output_mod[which(output_mod$label==0),]
+    det_table = output_mod[which(output_mod$label==1),]
+
+    colnames(eff_table)[which(colnames(eff_table)=="unq_bins")]="no_unq_bins"
+
+    eff_table$count= NULL
+    eff_table$label = NULL
+
+    comb = merge(det_table,eff_table,all = TRUE)
+
+    comb$unq_bins[which(is.na(comb$unq_bins))]=0
+    comb$no_unq_bins[which(is.na(comb$no_unq_bins))]=0
+
+    comb$total_bins = comb$unq_bins + comb$no_unq_bins
+    comb$perc_pres = comb$unq_bins/comb$total_bins
+
+    comb$procedure = as.factor(comb$procedure)
+
+    if(color_scale=='log'){
+      comb$count = log(comb$count)
+    }else if(color_scale=='sqrt'){
+      comb$count = sqrt(comb$count)
+    }
+
+    #now plot
+
+    base_map =ggplot(comb, aes(dt_, perc_pres)) +
+      geom_line(aes(color = procedure,alpha =count)) +
+      scale_alpha(range = c(0.35, 1)) +
+      scale_y_continuous(limits=c(0, 1), expand = c(0, 0)) +
+      scale_x_datetime(date_labels = "%m-%y",expand=c(0,0)) +
+      ggtitle(paste(bt_str,timescale,"bin % presence")) +
+      facet_grid(rows = vars(location_code )) +
+      theme_bw() +
+      theme(legend.title = element_text(size=12),
+            legend.text = element_text(size=12)) +
+      theme(axis.text = element_text(size=12),
+            axis.title.y = element_blank()) +
+      theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+      labs(fill = "% presence")
+
+    return(base_map)
+}
+
+
