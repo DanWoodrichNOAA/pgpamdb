@@ -991,8 +991,9 @@ table_update <-function(conn,tablename,dataset,colvector=NULL,idname = 'id'){
       dataset[,i] = format(dataset[,i],"%Y-%m-%d %H:%M:%S%z")
     }
   }
-
-  if(length(delta_ids)<1000){
+  #after redesigning triggers, modify this so it's a true update and not a delete / insert if task exceeds 1000
+  #rows
+  if(length(delta_ids)<1000 | tablename !='detections'){
 
   #single transaction.
   dbBegin(conn)
