@@ -21,7 +21,7 @@ source("./etc/paths.R") #populates connection paths which contain connection var
 #as I use this script, I'm just deleting and changing code to create the lookup table. to upload fgs only, I only use the first
 #part of the loop below
 
-con=pamdbConnect("poc_v2",keyscript,clientkey,clientcert)
+con=pamdbConnect("poc_v3",keyscript,clientkey,clientcert)
 
 nas_moor_names= dir("//161.55.120.117/NMML_AcousticsData/Audio_Data/Waves")
 db_moor_names = dbGet("SELECT name FROM data_collection")

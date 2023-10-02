@@ -993,7 +993,6 @@ table_update <-function(conn,tablename,dataset,colvector=NULL,idname = 'id'){
   }
   #after redesigning triggers, modify this so it's a true update and not a delete / insert if task exceeds 1000
   #rows
-  if(length(delta_ids)<1000 | tablename !='detections'){
 
   #single transaction.
   dbBegin(conn)
@@ -1070,39 +1069,6 @@ table_update <-function(conn,tablename,dataset,colvector=NULL,idname = 'id'){
   })
 
   dbCommit(conn)
-
-  }else{ #rows are >1000- update doesn't perform well, so do delete + insert.
-
-    #pull full dataset
-
-    existingdata2 = dbFetch(dbSendQuery(conn,paste("SELECT * FROM",
-                                                  tablename,"WHERE",idname,"IN (",paste(dataset[,idname],collapse=","),");")))
-    for(i in 1:length(existingdata2)){
-      if(class(existingdata2[,i])=="integer64"){
-        existingdata2[,i]=as.integer(existingdata2[,i])
-      }
-    }
-
-    for(i in 1:length(existingdata2)){
-      if(class(existingdata2[,i])=="POSIXct"){
-        existingdata2[,i] = format(existingdata2[,i],"%Y-%m-%d %H:%M:%S%z")
-      }
-    }
-
-    existingdata2 = existingdata2[order(existingdata2[,idname]),]
-    dataset = dataset[order(dataset[,idname]),]
-
-    #delete data (soft delete in detection case)
-    table_delete(con,tablename,dataset[,idname],idname)
-
-    for(i in 1:length(colvector)){
-      existingdata2[,colvector[i]]=dataset[,colvector[i]]
-    }
-
-      #insert data. specify ids = original ids and include both in insert.
-    dbAppendTable(con,'detections',existingdata2)
-
-  }
 
 }
 
