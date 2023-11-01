@@ -7,9 +7,20 @@
 bin_label_explore(
   conn,
   bin_label,
-  inst_source = "AFSC",
-  plot_sds = 4,
-  bin_type = 1
+  bin_type = 1,
+  plot_type = "perc_effort",
+  scale = "None",
+  exclude_procedure = c(),
+  include_children = TRUE,
+  exclude_loc_codes = c(),
+  lat_min = -90,
+  long_min = -180,
+  lat_max = 90,
+  long_max = -140,
+  start_date = as.POSIXct("2000-01-01 00:00:00", tz = "UTC"),
+  end_date = as.POSIXct(Sys.time()),
+  resolution = "month",
+  date_breaks_ = "6 months"
 )
 }
 \arguments{
@@ -17,11 +28,33 @@ bin_label_explore(
 
 \item{bin_label}{bin label code, ie 'RW'}
 
-\item{inst_source}{AFSC if you don't want to include other lab data in the db}
-
-\item{plot_sds}{standard deviations for the color scale. Smaller = more similar colors, larger = more dynamic colors.}
-
 \item{bin_type}{integer id for bin type- 1 = LOW, 2 = REG, 3 = SHI. Affects n but shouldn't affect plot too much.}
+
+\item{plot_type}{'perc_effort': shaded relative to effort present in timestep, perc_all_bins: shaded relative to total bins in timestep}
+
+\item{scale}{'None' for % presence, log for log (10) % presence.}
+
+\item{exclude_procedure}{'vector or single value of procedures to specifically exclude from query.}
+
+\item{include_children}{'TRUE or FALSE- if true, in cases like FW will also include child calls (FN: fin downsweep, BB: fin backbeat)}
+
+\item{exclude_loc_codes}{"location codes for any you want to specifically exclude within time and geographic range specified}
+
+\item{lat_min}{minimum latitude geographic extent (decimal)}
+
+\item{long_min}{minimum longitude geographic extent (decimal)}
+
+\item{lat_max}{maximum latitude geographic extent (decimal)}
+
+\item{long_max}{maximum longitude geographic extent (decimal)}
+
+\item{start_date}{start of time extent. must be in POSIXct format with timestamp}
+
+\item{end_date}{end of time extent. must be in POSIXct format with timestamp}
+
+\item{resolution}{postgres date_trunc valid values (https://www.codecademy.com/resources/docs/sql/dates/date-trunc)}
+
+\item{date_breaks_}{ggplot date_breaks allowed https://www.rdocumentation.org/packages/scales/versions/1.2.1/topics/date_breaks}
 }
 \value{
 ggplot object

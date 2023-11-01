@@ -1374,129 +1374,139 @@ detx_to_db <- function(conn,dataset){
 #' effort, boxes around tile indicate at least one positive presence instance.
 #' @param conn The database connection
 #' @param bin_label bin label code, ie 'RW'
-#' @param inst_source AFSC if you don't want to include other lab data in the db
-#' @param plot_sds standard deviations for the color scale. Smaller = more similar colors, larger = more dynamic colors.
 #' @param bin_type integer id for bin type- 1 = LOW, 2 = REG, 3 = SHI. Affects n but shouldn't affect plot too much.
+#' @param plot_type 'perc_effort': shaded relative to effort present in timestep, perc_all_bins: shaded relative to total bins in timestep
+#' @param scale 'None' for % presence, log for log (10) % presence.
+#' @param exclude_procedure 'vector or single value of procedures to specifically exclude from query.
+#' @param include_children 'TRUE or FALSE- if true, in cases like FW will also include child calls (FN: fin downsweep, BB: fin backbeat)
+#' @param exclude_loc_codes "location codes for any you want to specifically exclude within time and geographic range specified
+#' @param lat_min minimum latitude geographic extent (decimal)
+#' @param long_min minimum longitude geographic extent (decimal)
+#' @param lat_max maximum latitude geographic extent (decimal)
+#' @param long_max maximum longitude geographic extent (decimal)
+#' @param start_date start of time extent. must be in POSIXct format with timestamp
+#' @param end_date end of time extent. must be in POSIXct format with timestamp
+#' @param resolution postgres date_trunc valid values (https://www.codecademy.com/resources/docs/sql/dates/date-trunc)
+#' @param date_breaks_ ggplot date_breaks allowed https://www.rdocumentation.org/packages/scales/versions/1.2.1/topics/date_breaks
 #' @return ggplot object
 #' @export
 #'
-bin_label_explore<-function(conn,bin_label,inst_source='AFSC',plot_sds = 4,bin_type=1){
+
+bin_label_explore<-function(conn,bin_label,bin_type=1,plot_type="perc_effort",scale="None",
+                            exclude_procedure=c(),include_children=TRUE,exclude_loc_codes=c(),
+                            lat_min=-90,long_min=-180,lat_max=90,long_max=-140,start_date=as.POSIXct("2000-01-01 00:00:00",tz="UTC"),end_date=as.POSIXct(Sys.time()),
+                            resolution="month",date_breaks_="6 months"){
 
   bt_str = c("LOW","REG","SHI","CUSTOM")[bin_type]
-  #bin_label= 'fw' #temp
-  #inst_source = "AFSC"
 
-  if(inst_source == "AFSC"){
-    #bound the approximate region to get rid of the GR and other non-region AFSC data.
-    long_min = -185
-    long_max = -140
+  query_ = "SELECT AVG(latitude) as avg_lat,AVG(longitude) as avg_long,location_code FROM data_collection GROUP BY location_code"
 
-    #moved this up here, so that query will not reject sites without precise latlong info. Will pull all of the averages
-    #for each site, then restrict by site in below query, not by
+  avg_latlongs = dbFetch(dbSendQuery(conn,gsub("[\r\n]", "", query_)))
 
-    query_ = "SELECT AVG(latitude) as avg_lat,AVG(longitude) as avg_long,location_code FROM data_collection GROUP BY location_code"
+  avg_latlongs = avg_latlongs[which(!is.na(avg_latlongs$avg_lat)),]
 
-    avg_latlongs = dbFetch(dbSendQuery(conn,gsub("[\r\n]", "", query_)))
+  in_bounds_loc_codes = avg_latlongs[which(avg_latlongs$avg_long > long_min & avg_latlongs$avg_long < long_max
+                                           & avg_latlongs$avg_lat > lat_min & avg_latlongs$avg_lat < lat_max),]
 
-    avg_latlongs = avg_latlongs[which(!is.na(avg_latlongs$avg_lat)),]
+  if(length(exclude_loc_codes)>0){
 
-    in_bounds_loc_codes = avg_latlongs[which(avg_latlongs$avg_long > long_min & avg_latlongs$avg_long < long_max),]
+    in_bounds_loc_codes = in_bounds_loc_codes[-which(in_bounds_loc_codes %in% exclude_loc_codes)]
 
   }
 
-  query = paste("SELECT ",bin_label,",count(*),date_trunc('month', soundfiles.datetime) AS dt_,data_collection.name,data_collection.location_code,data_collection.latitude
-                FROM bin_label_wide JOIN bins ON bins.id = bin_label_wide.id JOIN soundfiles ON bins.soundfiles_id = soundfiles.id JOIN data_collection ON data_collection.id = soundfiles.data_collection_id
+
+  if(length(exclude_procedure)>0){
+    exclude_proc_string = paste("AND detections.procedure NOT IN (",paste(exclude_procedure,collapse=",",sep=""),")",sep="")
+  }else{
+    exclude_proc_string=""
+  }
+
+  bin_labels_sql = paste("('",paste(bin_label,collapse="','",sep=""),"')",sep="")
+
+  if(include_children){
+    bin_label_id = dbFetch(dbSendQuery(conn,gsub("[\r\n]", "", paste("SELECT id FROM signals WHERE code IN",bin_labels_sql))))
+    bin_label_id = as.integer(bin_label_id$id)
+
+    bin_label_query = paste("(with RECURSIVE
+    n AS (
+      SELECT * FROM signals WHERE parent_id IN (",bin_label_id,") OR id IN (",bin_label_id,")
+      UNION ALL
+      SELECT i.*
+        from n
+      JOIN signals i ON i.parent_id = n.id
+    )
+    SELECT DISTINCT code from n)")
+  }else{
+    bin_label_query = paste("(",paste(bin_label,collapse=",",sep=""),")",sep="")
+  }
+
+  query = paste("SELECT COUNT(CASE WHEN subquery.label IN (1,21) THEN 1 END) as p_bins, COUNT(CASE WHEN subquery.label IN (0,20) THEN 1 END) AS n_bins,subquery2.bin_total,
+  subquery2.dt_,subquery2.location_code,subquery3.latitude FROM (SELECT DISTINCT ON (bins.id) detections.label,bins.id,COUNT(*),date_trunc('",resolution,"', soundfiles.datetime) AS dt_,data_collection.location_code,
+  CASE detections.label WHEN 1 THEN 1 WHEN 21 THEN 2 WHEN 0 THEN 3 WHEN 20 THEN 4 ELSE 5 END AS label_preference
+  FROM bins JOIN soundfiles ON bins.soundfiles_id = soundfiles.id JOIN data_collection ON data_collection.id = soundfiles.data_collection_id
+  JOIN bins_detections ON bins_detections.bins_id = bins.id JOIN detections ON bins_detections.detections_id = detections.id JOIN signals ON signals.id = detections.signal_code
+  WHERE bins.type = ",bin_type," AND data_collection.institution_source = '",inst_source,"' AND data_collection.location_code IN ('",paste(unique(in_bounds_loc_codes$location_code),sep="",collapse="','"),"')
+  AND signals.code IN ",bin_label_query," ",exclude_proc_string,"
+  AND soundfiles.datetime >= '",start_date,"'::TIMESTAMP WITH TIME ZONE AND soundfiles.datetime <='",end_date,"'::TIMESTAMP WITH TIME ZONE
+  GROUP BY detections.label,bins.id,dt_,data_collection.location_code
+  ORDER BY bins.id,label_preference) AS subquery RIGHT JOIN (
+                SELECT COUNT(*) AS bin_total,date_trunc('",resolution,"', soundfiles.datetime) AS dt_,
+                data_collection.location_code
+                FROM bins JOIN soundfiles ON bins.soundfiles_id = soundfiles.id JOIN data_collection ON
+                data_collection.id = soundfiles.data_collection_id
                 WHERE bins.type = ",bin_type," AND data_collection.institution_source = '",inst_source,"' AND data_collection.location_code IN ('",paste(unique(in_bounds_loc_codes$location_code),sep="",collapse="','"),"')
-                 GROUP BY ",bin_label,",dt_,data_collection.name,data_collection.location_code,data_collection.latitude",sep="")
+                AND soundfiles.datetime >= '",start_date,"'::TIMESTAMP WITH TIME ZONE AND soundfiles.datetime <='",end_date,"'::TIMESTAMP WITH TIME ZONE
+                GROUP BY dt_,data_collection.location_code) AS subquery2
+                ON subquery.dt_ = subquery2.dt_ AND subquery.location_code = subquery2.location_code
+                JOIN (SELECT AVG(latitude) as latitude, location_code FROM data_collection GROUP BY location_code) AS subquery3
+                ON subquery2.location_code = subquery3.location_code GROUP BY subquery2.bin_total,subquery2.dt_,subquery2.location_code,subquery3.latitude",sep="")
 
   output = dbFetch(dbSendQuery(conn,gsub("[\r\n]", "", query)))
 
-  #avg_lat for site
-  avg_lat = aggregate(output$latitude, list(output$location_code), FUN=function(x) mean(x,na.rm=TRUE))
-  colnames(avg_lat)=c("Site","Lat")
+  output$p_bins = as.integer(output$p_bins)
+  output$n_bins = as.integer(output$n_bins)
+  output$bin_total = as.integer(output$bin_total)
 
-  #fill in the avg lat if missing
-
-  if(any(is.na(output$latitude))){
-    output$latitude[which(is.na(output$latitude))] = avg_lat$Lat[match(output$location_code[which(is.na(output$latitude))],avg_lat$Site)]
+  if(plot_type=="perc_effort"){
+    output$metric = output$p_bins/(output$p_bins+output$n_bins)
+  }else if (plot_type=="perc_all_bins"){
+    output$metric = output$p_bins/output$bin_total
+    output$metric[which(output$n_bins==0 & output$p_bins==0)]=NA
+  }else{
+    stop("invalid plot type")
   }
 
-  #combine output table so that 1/21 and 0/20 are combined, and 99s are distinct
+  output$metric = output$metric*100
 
-  output_mod = output
-
-  output_mod$common_label= 0
-
-  output_mod[which(output_mod[,bin_label]==21),"common_label"]=1
-  output_mod[which(output_mod[,bin_label]==1),"common_label"]=1
-  output_mod[which(output_mod[,bin_label]==0),"common_label"]=0
-  output_mod[which(output_mod[,bin_label]==20),"common_label"]=0
-  output_mod[which(output_mod[,bin_label]==99),"common_label"]=2
-
-  output_mod$count= as.integer(output_mod$count)
-
-  output_mod_agg =aggregate(output_mod$count, list(output_mod$dt,output_mod$name,output_mod$location_code,output_mod$latitude,output_mod$common_label), FUN=function(x) sum(x,na.rm=TRUE))
-
-  colnames(output_mod_agg)= c(colnames(output_mod[3:length(output_mod)]),"count")
-
-  output_mod_agg$count[which(output_mod_agg$common_label==2)]=NA
-
-  output_mod_agg$avg_lat = avg_lat[match(output_mod_agg$location_code,avg_lat$Site),"Lat"]
-
-  output_mod_agg$dt_num = as.numeric(output_mod_agg$dt_)
-  output_mod_agg$avg_lat_chr = as.character(round(output_mod_agg$avg_lat,2))
-
-
-  output_mod_agg$location_code =factor(output_mod_agg$location_code,level = unique(output_mod_agg$location_code[order(output_mod_agg$avg_lat_chr)]))
-
-  output_mod_agg$sub_na = FALSE
-
-  output_mod_agg[which(!is.na(output_mod_agg$count)),"sub_na"] = (paste(output_mod_agg[which(!is.na(output_mod_agg$count)),"dt_"],
-                                                                        output_mod_agg[which(!is.na(output_mod_agg$count)),"location_code"]) %in%
-                                                                    paste(output_mod_agg[which(is.na(output_mod_agg$count)),"dt_"],
-                                                                          output_mod_agg[which(is.na(output_mod_agg$count)),"location_code"]))
-
-  output_mod_agg_sub = output_mod_agg[which(output_mod_agg$sub_na),]
-
-  output_mod_agg = output_mod_agg[-which((paste(output_mod_agg$dt_,output_mod_agg$location_code) %in%
-                                            paste(output_mod_agg_sub$dt_,output_mod_agg_sub$location_code)) &
-                                           is.na(output_mod_agg$count)),]
-
-  output_mod_agg$count_adj = output_mod_agg$count* output_mod_agg$common_label
-
-  month_lookup = aggregate(output_mod_agg$count,list(output_mod_agg$dt_,output_mod_agg$name),sum)
-  colnames(month_lookup) = c("dt","name","total_bins")
-
-  output_mod_agg$count_adj = output_mod_agg$count_adj/ month_lookup$total_bins[match(paste(output_mod_agg$dt_,output_mod_agg$name),paste(month_lookup$dt,month_lookup$name))]
-
-  scale_midpoint = mean(output_mod_agg$count_adj,na.rm=TRUE)
-  scale_sd = sd(output_mod_agg$count_adj,na.rm=TRUE)
-
-  scale_max = scale_midpoint+ scale_sd*plot_sds
-
-  if(scale_max>1){
-    scale_max = 1
+  if(scale=="log"){
+    output$metric = log(output$metric+1)
+    key = "log bin % presence:"
+    key2 = "log % presence"
+  }else{
+    key = "bin % presence"
+    key2 = "% presence"
   }
 
-  output_mod_agg[which(output_mod_agg$count_adj>scale_max),"count_adj"]=scale_max
+  colnames(output)[which(colnames(output)=="dt_")]="mm_yy"
 
-  colnames(output_mod_agg)[which(colnames(output_mod_agg)=="dt_")]="mm_yy"
+  #order based on latitude
+  output$location_code =factor(output$location_code,level = unique(output$location_code[order(output$latitude)]))
 
-  base_map =ggplot(output_mod_agg, aes(mm_yy, location_code)) +
-    geom_tile(aes(fill = count_adj), color = "gray") +
-    geom_tile(data = output_mod_agg[which(output_mod_agg$count>0 & output_mod_agg$common_label==1),], color = "black",fill=NA) +
-    scale_fill_gradient2(limits=c(0, scale_max), low = "white", high= "purple",
-                         midpoint =  scale_midpoint) +
+  base_map =ggplot(output, aes(mm_yy, location_code)) +
+    geom_tile(aes(fill = metric), color = "gray") +
+    geom_tile(data = output[which(output$metric>0 & !is.na(output$metric)),], color = "black",fill=NA) +
+    scale_fill_gradient2(limits=c(0, max(output$metric,na.rm = TRUE)), low = "white", mid = "yellow",high= "red",
+                         midpoint =  max(output$metric,na.rm = TRUE)/2) +
     #scale_x_discrete(expand = c(0,0)) +
-    scale_x_datetime(date_breaks = "6 months" , date_labels = "%m-%y",expand=c(0,0)) +
-    ggtitle(paste(bin_label,"monthly",bt_str,"bin % presence")) +
+    scale_x_datetime(date_breaks = date_breaks_ , date_labels = "%m-%y",expand=c(0,0)) +
+    ggtitle(paste(bin_label,resolution,"timestep",bt_str,key)) +
     theme_bw() +
     theme(legend.title = element_text(size=12),
           legend.text = element_text(size=12)) +
     theme(axis.text = element_text(size=12),
           axis.title.y = element_blank()) +
     theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
-    labs(fill = "% presence")
+    labs(fill = key2)
 
 
   return(base_map)
