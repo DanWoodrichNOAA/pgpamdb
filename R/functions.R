@@ -1445,7 +1445,7 @@ bin_label_explore<-function(conn,bin_label,bin_type=1,plot_type="perc_effort",sc
   CASE detections.label WHEN 1 THEN 1 WHEN 21 THEN 2 WHEN 0 THEN 3 WHEN 20 THEN 4 ELSE 5 END AS label_preference
   FROM bins JOIN soundfiles ON bins.soundfiles_id = soundfiles.id JOIN data_collection ON data_collection.id = soundfiles.data_collection_id
   JOIN bins_detections ON bins_detections.bins_id = bins.id JOIN detections ON bins_detections.detections_id = detections.id JOIN signals ON signals.id = detections.signal_code
-  WHERE bins.type = ",bin_type," AND data_collection.institution_source = '",inst_source,"' AND data_collection.location_code IN ('",paste(unique(in_bounds_loc_codes$location_code),sep="",collapse="','"),"')
+  WHERE bins.type = ",bin_type," AND data_collection.location_code IN ('",paste(unique(in_bounds_loc_codes$location_code),sep="",collapse="','"),"')
   AND signals.code IN ",bin_label_query," ",exclude_proc_string,"
   AND soundfiles.datetime >= '",start_date,"'::TIMESTAMP WITH TIME ZONE AND soundfiles.datetime <='",end_date,"'::TIMESTAMP WITH TIME ZONE
   GROUP BY detections.label,bins.id,dt_,data_collection.location_code
@@ -1454,7 +1454,7 @@ bin_label_explore<-function(conn,bin_label,bin_type=1,plot_type="perc_effort",sc
                 data_collection.location_code
                 FROM bins JOIN soundfiles ON bins.soundfiles_id = soundfiles.id JOIN data_collection ON
                 data_collection.id = soundfiles.data_collection_id
-                WHERE bins.type = ",bin_type," AND data_collection.institution_source = '",inst_source,"' AND data_collection.location_code IN ('",paste(unique(in_bounds_loc_codes$location_code),sep="",collapse="','"),"')
+                WHERE bins.type = ",bin_type," AND data_collection.location_code IN ('",paste(unique(in_bounds_loc_codes$location_code),sep="",collapse="','"),"')
                 AND soundfiles.datetime >= '",start_date,"'::TIMESTAMP WITH TIME ZONE AND soundfiles.datetime <='",end_date,"'::TIMESTAMP WITH TIME ZONE
                 GROUP BY dt_,data_collection.location_code) AS subquery2
                 ON subquery.dt_ = subquery2.dt_ AND subquery.location_code = subquery2.location_code

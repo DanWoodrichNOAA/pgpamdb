@@ -20,150 +20,77 @@ con=pamdbConnect("poc_v3",keyscript,clientkey,clientcert)
 #on signal density (as with fins)
 
 #initially- want to explore where ribbon calls are represented in the data.
-#for that, we will want to revise the package function to show this as
-#we did for LM and FW.
+#let's take a look.
 
-#work on it in here, then move it to fxns.
-conn = con
-bin_label = "RB" #can be single or vector of multiple
-bin_type=3
-exclude_procedure=c()
-plot_type = "perc_effort" # perc_effort or perc_all_bins
-include_children=TRUE
-scale="None" #or log
+RBdata = bin_label_explore(con,"RB")
 
-resolution= "month" #date trunc valid values (https://www.codecademy.com/resources/docs/sql/dates/date-trunc)
-date_breaks_ = "2 months" # ggplot date_breaks allowed https://www.rdocumentation.org/packages/scales/versions/1.2.1/topics/date_breaks
-start_date = as.POSIXct("2014-01-01 00:00:00 UTC")
-end_date = as.POSIXct("2016-01-01 00:00:00 UTC")
-lat_min = 50
-lat_max = 75
-exclude_loc_codes = c()
+RBdata_og_vis = RBdata + add_layer_ble(con,23,10,"green")
 
-bin_label_explore<-function(conn,bin_label,bin_type=1,plot_type="perc_effort",scale="None",
-                            exclude_procedure=c(),include_children=TRUE,exclude_loc_codes=c(),
-                            lat_min=-90,long_min=-180,lat_max=90,long_max=-140,start_date=as.POSIXct("2000-01-01 00:00:00",tz="UTC"),end_date=as.POSIXct(Sys.time()),
-                            resolution="month",date_breaks_="6 months"){
+#handlabeled fg- create a custom fg composed of detections. Register it as fg / custom bins.
+#just query existing labels as training labels, take a look and quality control as needed.
 
-  bt_str = c("LOW","REG","SHI","CUSTOM")[bin_type]
+#get the full ildiko dataset- positives, negatives, assumed negatives.
+ildikoset_all = dbGet("SELECT * FROM detections WHERE procedure = 18")
 
-  query_ = "SELECT AVG(latitude) as avg_lat,AVG(longitude) as avg_long,location_code FROM data_collection GROUP BY location_code"
+#so when I did fin, I just pulled in the full bins and hand labeled what was missing. Any reason why
+#this is different here?
 
-  avg_latlongs = dbFetch(dbSendQuery(conn,gsub("[\r\n]", "", query_)))
+#will still not get the missed calls back into training.
+#fewer calls to box (even more of an argument to include)
 
-  avg_latlongs = avg_latlongs[which(!is.na(avg_latlongs$avg_lat)),]
+#coverage is pretty good in the original training set.
+#lets compare label quantities:
+heloiseset_all= dbGet("SELECT * FROM detections WHERE procedure = 10 and signal_code = 23")
 
-  in_bounds_loc_codes = avg_latlongs[which(avg_latlongs$avg_long > long_min & avg_latlongs$avg_long < long_max
-                                           & avg_latlongs$avg_lat > lat_min & avg_latlongs$avg_lat < lat_max),]
+#the ildiko labels are definitely more numerous, but due to procedure simply just have to be looked over.
+#can I do anything automated here? Doubtful. lots of other callers during ribbon time so simple threshold
+#is no good.
 
-  if(length(exclude_loc_codes)>0){
+#one thing to try: I could assess the marginal benefit of actually hand combing through the labels.
+#divide the original set up by year categories.
 
-    in_bounds_loc_codes = in_bounds_loc_codes[-which(in_bounds_loc_codes %in% exclude_loc_codes)]
+#conditions to test, using metrics on test split as result:
+#Use the rest of the original set
+#Use the rest of the original set and a random portion of the new labels (unreviewed)
+#Use the rest of the original set and the same portion of the new labels, reviewed.
 
-  }
+#this could potentially make a good paper, very relevant to real world problems that are faced in model
+#deployment. However, I think that a criticism would come up that since the 'test' dataset was used in
+#the original training, it wouldn't be as succeptible to missed detections, since those detections
+#would be less relevant/impactfull on the original dataset.
 
+#so if I were to do this, I would probably want to use a new,
+#sampled outside of detector dataset as the test dataset.
 
-  if(length(exclude_procedure)>0){
-    exclude_proc_string = paste("AND detections.procedure NOT IN (",paste(exclude_procedure,collapse=",",sep=""),")",sep="")
-  }else{
-    exclude_proc_string=""
-  }
-
-  bin_labels_sql = paste("('",paste(bin_label,collapse="','",sep=""),"')",sep="")
-
-  if(include_children){
-    bin_label_id = dbFetch(dbSendQuery(conn,gsub("[\r\n]", "", paste("SELECT id FROM signals WHERE code IN",bin_labels_sql))))
-    bin_label_id = as.integer(bin_label_id$id)
-
-    bin_label_query = paste("(with RECURSIVE
-    n AS (
-      SELECT * FROM signals WHERE parent_id IN (",bin_label_id,") OR id IN (",bin_label_id,")
-      UNION ALL
-      SELECT i.*
-        from n
-      JOIN signals i ON i.parent_id = n.id
-    )
-    SELECT DISTINCT code from n)")
-  }else{
-    bin_label_query = paste("(",paste(bin_label,collapse=",",sep=""),")",sep="")
-  }
-
-  query = paste("SELECT COUNT(CASE WHEN subquery.label IN (1,21) THEN 1 END) as p_bins, COUNT(CASE WHEN subquery.label IN (0,20) THEN 1 END) AS n_bins,subquery2.bin_total,
-  subquery2.dt_,subquery2.location_code,subquery3.latitude FROM (SELECT DISTINCT ON (bins.id) detections.label,bins.id,COUNT(*),date_trunc('",resolution,"', soundfiles.datetime) AS dt_,data_collection.location_code,
-  CASE detections.label WHEN 1 THEN 1 WHEN 21 THEN 2 WHEN 0 THEN 3 WHEN 20 THEN 4 ELSE 5 END AS label_preference
-  FROM bins JOIN soundfiles ON bins.soundfiles_id = soundfiles.id JOIN data_collection ON data_collection.id = soundfiles.data_collection_id
-  JOIN bins_detections ON bins_detections.bins_id = bins.id JOIN detections ON bins_detections.detections_id = detections.id JOIN signals ON signals.id = detections.signal_code
-  WHERE bins.type = ",bin_type," AND data_collection.institution_source = '",inst_source,"' AND data_collection.location_code IN ('",paste(unique(in_bounds_loc_codes$location_code),sep="",collapse="','"),"')
-  AND signals.code IN ",bin_label_query," ",exclude_proc_string,"
-  AND soundfiles.datetime >= '",start_date,"'::TIMESTAMP WITH TIME ZONE AND soundfiles.datetime <='",end_date,"'::TIMESTAMP WITH TIME ZONE
-  GROUP BY detections.label,bins.id,dt_,data_collection.location_code
-  ORDER BY bins.id,label_preference) AS subquery RIGHT JOIN (
-                SELECT COUNT(*) AS bin_total,date_trunc('",resolution,"', soundfiles.datetime) AS dt_,
-                data_collection.location_code
-                FROM bins JOIN soundfiles ON bins.soundfiles_id = soundfiles.id JOIN data_collection ON
-                data_collection.id = soundfiles.data_collection_id
-                WHERE bins.type = ",bin_type," AND data_collection.institution_source = '",inst_source,"' AND data_collection.location_code IN ('",paste(unique(in_bounds_loc_codes$location_code),sep="",collapse="','"),"')
-                AND soundfiles.datetime >= '",start_date,"'::TIMESTAMP WITH TIME ZONE AND soundfiles.datetime <='",end_date,"'::TIMESTAMP WITH TIME ZONE
-                GROUP BY dt_,data_collection.location_code) AS subquery2
-                ON subquery.dt_ = subquery2.dt_ AND subquery.location_code = subquery2.location_code
-                JOIN (SELECT AVG(latitude) as latitude, location_code FROM data_collection GROUP BY location_code) AS subquery3
-                ON subquery2.location_code = subquery3.location_code GROUP BY subquery2.bin_total,subquery2.dt_,subquery2.location_code,subquery3.latitude",sep="")
-
-  output = dbFetch(dbSendQuery(conn,gsub("[\r\n]", "", query)))
-
-  output$p_bins = as.integer(output$p_bins)
-  output$n_bins = as.integer(output$n_bins)
-  output$bin_total = as.integer(output$bin_total)
-
-  if(plot_type=="perc_effort"){
-    output$metric = output$p_bins/(output$p_bins+output$n_bins)
-  }else if (plot_type=="perc_all_bins"){
-    output$metric = output$p_bins/output$bin_total
-    output$metric[which(output$n_bins==0 & output$p_bins==0)]=NA
-  }else{
-    stop("invalid plot type")
-  }
-
-  output$metric = output$metric*100
-
-  if(scale=="log"){
-    output$metric = log(output$metric+1)
-    key = "log bin % presence:"
-    key2 = "log % presence"
-  }else{
-    key = "bin % presence"
-    key2 = "% presence"
-  }
-
-  colnames(output)[which(colnames(output)=="dt_")]="mm_yy"
-
-  #order based on latitude
-  output$location_code =factor(output$location_code,level = unique(output$location_code[order(output$latitude)]))
-
-  base_map =ggplot(output, aes(mm_yy, location_code)) +
-    geom_tile(aes(fill = metric), color = "gray") +
-    geom_tile(data = output[which(output$metric>0 & !is.na(output$metric)),], color = "black",fill=NA) +
-    scale_fill_gradient2(limits=c(0, max(output$metric,na.rm = TRUE)), low = "white", mid = "yellow",high= "red",
-                         midpoint =  max(output$metric,na.rm = TRUE)/2) +
-    #scale_x_discrete(expand = c(0,0)) +
-    scale_x_datetime(date_breaks = date_breaks_ , date_labels = "%m-%y",expand=c(0,0)) +
-    ggtitle(paste(bin_label,resolution,"timestep",bt_str,key)) +
-    theme_bw() +
-    theme(legend.title = element_text(size=12),
-          legend.text = element_text(size=12)) +
-    theme(axis.text = element_text(size=12),
-          axis.title.y = element_blank()) +
-    theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
-    labs(fill = key2)
+#how about attempting it for beardeds? That could be fine, but I will not have a previous detector
+#to leverage.
 
 
-  return(base_map)
+#Idea for ribbons: I take the time to sample and labels a dataset of like, not more than 5000
+#detections. let's for instance take a look at how much fin I labeled:
 
-}
+#34,000!
+fin_num = dbGet("SELECT COUNT(*) FROM detections WHERE signal_code = 4 AND label = 1 AND procedure = 10")
+
+#so, it would take me a fraction of the time, and if that were useful to potentially write a paper, then
+#that's great. (such a paper could perhaps be the white literature for the new method as well)
+
+#need to make sure I have a query ready to access the pre-modified dataset as needed.
+
+#however this is totally forgetting- I am banking on some SC data coming in. And in that case,
+#it will be entirely unboxed. If going down this road, I may want to include the SC data
+#and include a routine to autobox it - maybe it is trash, maybe not. But idk if that will ever work
+#with something like ribbon- I guess we could see??
+
+#even if just for internal assessment, could be useful.
+
+#so, what is there to do here if anything? Not sure, depends on whether I have to wait much longer for
+#sc labels.
+
+#tomorrow, will move towards bearded label formatting and go from there.
 
 
-out = bin_label_explore(conn,"FW",inst_source='AFSC',plot_sds = 4,bin_type=1,plot_type="perc_effort")
-test = add_layer_ble(con,6,10,"orange")
+###just collect the currently labeled ribbon data to start developing stectrogram and model parameters:
+fgs = dbGet("SELECT name FROM effort WHERE name LIKE '%rb%'")
 
-plot(base_map+test)
 
