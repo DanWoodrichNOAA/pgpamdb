@@ -33,13 +33,13 @@ db_moor_names = db_moor_names$name
 #so need to assess a few things.
 #are there db moorings that do not match nas moorings? (if so to add name to db table)
 if(!all(nas_moor_names %in% db_moor_names)){
-
+  
   moors_to_pub = data.frame(nas_moor_names[-which(nas_moor_names %in% db_moor_names)])
-
+  
   colnames(moors_to_pub)="name"
-
+  
   dbAppendTable(con,"data_collection",moors_to_pub)
-
+  
 }
 #are there db moorings that are unpopulated? (if so, add registry of the files on nas to soundfiles)
 
@@ -54,7 +54,7 @@ moor_to_upload = moor_sfcounts[which(moor_sfcounts$count==0),]
 moor_to_upload = moor_to_upload[which(moor_to_upload$name %in% nas_moor_names),]
 
 if(nrow(moor_to_upload)>0){
-
+  
   SFs = foreach(n=1:length(moor_to_upload$name)) %do% {
     #go to the NAS and start finding wavs. Need name, full path (for INSTINCT convenience, can be recalculated/assumed if need be), duration, deployment
     path1 = paste("//161.55.120.117/NMML_AcousticsData/Audio_Data/Waves",moor_to_upload$name[n],sep="/")
@@ -67,16 +67,31 @@ if(nrow(moor_to_upload)>0){
         header = readWave(path3,header = TRUE)
         return(c(files[z],paste("/",moor_to_upload$name[n],"/",m_ys[i],"/",sep=""),round(header$samples/header$sample.rate,2),moor_to_upload$name[n]))
       }
-
+      
       filesout = do.call("rbind",filesout)
       return(filesout)
     }
     subdirs = do.call("rbind",subdirs)
+    
+    #subdirs = data.frame(subdirs)
     return(subdirs)
   }
-
+  
   SFs = do.call("rbind",SFs)
-
+  
+  SFs = data.frame(SFs)
+  
+  SFs$datetime = as.POSIXct(substr(SFs[,1],nchar(SFs[,1])-16,nchar(SFs[,1])-4),format="%y%m%d-%H%M%S",tz='UTC')
+  
+  colnames(SFs) = c("name","path","duration","mooring_name","datetime")
+  
+  moor_name_lookup= lookup_from_match(con,"data_collection",unique(SFs$mooring_name),"name")
+  
+  SFs$data_collection_id = moor_name_lookup[match(SFs$mooring_name,moor_name_lookup$name),"id"]
+  
+  SFs$path=NULL
+  SFs$mooring_name=NULL
+  
+  dbAppendTable(con,'soundfiles',SFs)
+  
 }
-
-
