@@ -13,6 +13,8 @@ dbGet <-function(x){
 #modify columns for database.
 library(foreach)
 library(tuneR)
+library(pgpamdb)
+library(DBI)
 
 source("./R/functions.R") #package under construction
 
@@ -56,12 +58,13 @@ moor_to_upload = moor_to_upload[which(moor_to_upload$name %in% nas_moor_names),]
 if(nrow(moor_to_upload)>0){
   
   SFs = foreach(n=1:length(moor_to_upload$name)) %do% {
+    print(paste(moor_to_upload$name[n],n))
     #go to the NAS and start finding wavs. Need name, full path (for INSTINCT convenience, can be recalculated/assumed if need be), duration, deployment
     path1 = paste("//161.55.120.117/NMML_AcousticsData/Audio_Data/Waves",moor_to_upload$name[n],sep="/")
     m_ys = dir(path1)
     subdirs = foreach(i=1:length(m_ys)) %do% {
       path2 = paste(path1,m_ys[i],sep="/")
-      files= dir(path2)
+      files= dir(path2,pattern=".wav")
       filesout = foreach(z=1:length(files)) %do% {
         path3 = paste(path2,files[z],sep="/")
         header = readWave(path3,header = TRUE)
@@ -73,25 +76,22 @@ if(nrow(moor_to_upload)>0){
     }
     subdirs = do.call("rbind",subdirs)
     
-    #subdirs = data.frame(subdirs)
-    return(subdirs)
+    SFs = data.frame(subdirs)
+    
+    SFs$datetime = as.POSIXct(substr(SFs[,1],nchar(SFs[,1])-16,nchar(SFs[,1])-4),format="%y%m%d-%H%M%S",tz='UTC')
+    
+    colnames(SFs) = c("name","path","duration","mooring_name","datetime")
+    
+    moor_name_lookup= lookup_from_match(con,"data_collection",unique(SFs$mooring_name),"name")
+    
+    SFs$data_collection_id = moor_name_lookup[match(SFs$mooring_name,moor_name_lookup$name),"id"]
+    
+    SFs$path=NULL
+    SFs$mooring_name=NULL
+    
+    dbAppendTable(con,'soundfiles',SFs)
+    
+    print(paste("submitted",paste(moor_to_upload$name[n],n)))
   }
-  
-  SFs = do.call("rbind",SFs)
-  
-  SFs = data.frame(SFs)
-  
-  SFs$datetime = as.POSIXct(substr(SFs[,1],nchar(SFs[,1])-16,nchar(SFs[,1])-4),format="%y%m%d-%H%M%S",tz='UTC')
-  
-  colnames(SFs) = c("name","path","duration","mooring_name","datetime")
-  
-  moor_name_lookup= lookup_from_match(con,"data_collection",unique(SFs$mooring_name),"name")
-  
-  SFs$data_collection_id = moor_name_lookup[match(SFs$mooring_name,moor_name_lookup$name),"id"]
-  
-  SFs$path=NULL
-  SFs$mooring_name=NULL
-  
-  dbAppendTable(con,'soundfiles',SFs)
-  
+
 }

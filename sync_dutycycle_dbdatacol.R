@@ -16,7 +16,7 @@ source("./etc/paths.R") #populates connection paths which contain connection var
 #as I use this script, I'm just deleting and changing code to create the lookup table. to upload fgs only, I only use the first
 #part of the loop below
 
-con=pamdbConnect("poc_v2",keyscript,clientkey,clientcert)
+con=pamdbConnect("poc_v3",keyscript,clientkey,clientcert)
 
 #this script will load in a csv of duty cycle, scan for change on db data, and update any changes made to
 #duty cycle.
