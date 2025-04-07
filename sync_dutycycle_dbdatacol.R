@@ -8,8 +8,10 @@ dbGet <-function(x){
 library(foreach)
 library(tuneR)
 library(dplyr)
+library(pgpamdb)
+library(DBI)
 
-source("./R/functions.R") #package under construction
+#source("./R/functions.R") #package under construction
 
 source("./etc/paths.R") #populates connection paths which contain connection variables.
 
@@ -46,6 +48,22 @@ duty_cycle_format = data.frame(duty_cycle$mooring_deploy_name,duty_cycle$mooring
                                duty_cycle$sampling_rate_hz)
 
 colnames(duty_cycle_format) = c('name','location_code','latitude','longitude','water_depth','sensor_depth','rec_time','cycle_time','start_data','end_data','sampling_rate')
+
+#add in new rows. 
+
+
+if(any(!duty_cycle_format$name %in% data_col$name)){
+  
+  duty_cycle_format_new = duty_cycle_format[-which(duty_cycle_format$name %in% data_col$name),]
+  
+  dbAppendTable(con,"data_collection",duty_cycle_format_new)
+  
+  duty_cycle_format = duty_cycle_format[-which(duty_cycle_format$name %in% duty_cycle_format_new$name),]
+  
+}
+
+
+#modify changes in existing
 
 alldata = rows_patch(data_col, duty_cycle_format[which(duty_cycle_format$name %in% data_col$name),], by = "name")
 alldata$id = as.integer(alldata$id)
