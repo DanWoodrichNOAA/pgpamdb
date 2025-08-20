@@ -326,54 +326,54 @@ bin_negatives<-function(data,FG,bintype,analyst='previous',procedure = NULL,sign
 #' @return number of rows inserted corresponding to new implied negative detections.
 #' @export
 i_neg_update <- function(conn,fgname,procedure,signal_code,high_freq = NULL){
-
+  
   #make sure it has i_neg assumption
-
+  
   query = paste("SELECT * FROM effort_procedures JOIN effort ON effort_procedures.effort_id = effort.id
   WHERE procedures_id = ",procedure," AND signal_code = ",signal_code," AND effort.name = '",fgname,"'",sep="")
-
+  
   query <- gsub("[\r\n]", "", query)
-
+  
   row = dbFetch(dbSendQuery(conn,query))
-
+  
   if(row$effproc_assumption!='i_neg'){
     stop("cannot confirm the section of effort as i_neg assumption on select procedure and signal code. Add entry to
          effort_procedures if assumption is correct")
   }
   #
-
+  
   dets = dbFetch(dbSendQuery(conn,paste("SELECT DISTINCT detections.* FROM detections JOIN bins_detections ON bins_detections.detections_id = detections.id JOIN bins ON bins.id = bins_detections.bins_id JOIN bins_effort ON bins.id = bins_effort.bins_id JOIN effort ON bins_effort.effort_id = effort.id WHERE effort.name = '",fgname,"' AND status = 1 AND procedure = ",procedure," AND signal_code =",signal_code,sep="")))
   FG = dbFetch(dbSendQuery(conn,paste("SELECT bins.*,soundfiles.datetime FROM bins JOIN bins_effort ON bins.id = bins_effort.bins_id JOIN effort ON bins_effort.effort_id = effort.id JOIN soundfiles ON bins.soundfiles_id = soundfiles.id WHERE effort.name = '",fgname,"'",sep="")))
-
+  
   #delete any negatives that are already in there
   det_negs = dets[which(dets$label==0),]
   det_negs_id = as.integer(det_negs$id)
-
+  
   dets = dets[which(dets$label!=0),]
-
+  
   if(is.null(high_freq)){
-
+    
     #first, see if available through lookup.
-
+    
     high_freq = dbFetch(dbSendQuery(conn,paste("SELECT visible_hz FROM procedures WHERE id = ",procedure,sep="")))$visible_hz
-
+    
     if(is.null(high_freq) | is.na(high_freq)){
-
+      
       #if not available through lookup, use max existing detection
       high_freq = dbFetch(dbSendQuery(conn,paste("SELECT MAX(high_freq) FROM detections WHERE procedure = ",procedure," AND signal_code = ",signal_code,sep="")))$max
-
+      
       if(is.null(high_freq) | is.na(high_freq)){
-
+        
         stop("no way to determine high_freq from info on db. Please specify a value into function argument 'high_freq'")
-
+        
       }
-
+      
     }
-
+    
   }
-
+  
   i_neg_out = i_neg_interpolate(dets,FG,high_freq,procedure,signal_code,2)
-
+  
   #make modified date be most recent modified positive.
   if(nrow(dets)>0){
     i_neg_out$modified = max(dets$modified)
@@ -381,82 +381,94 @@ i_neg_update <- function(conn,fgname,procedure,signal_code,high_freq = NULL){
     #else, make it default to now.
     i_neg_out$modified = NULL
   }
-
+  
   #compare i_neg_out to existing negatives from db. if all the important columns are the same, don't upload it. delete and reupload
   #for any differences.
-
+  
   i_neg_out$start_file = as.integer(i_neg_out$start_file)
   i_neg_out$end_file = as.integer(i_neg_out$end_file)
-
+  
   i_neg_out$id = NA
   i_neg_out$temp_id = 1:nrow(i_neg_out)
-
+  
   if(nrow(det_negs) > 0){
-
+    
     det_negs$id = as.integer(det_negs$id)
     det_negs$temp_id = NA
-
+    
     det_negs$start_file = as.integer(det_negs$start_file)
     det_negs$end_file = as.integer(det_negs$end_file)
-
+    
     combine_negs = rbind(i_neg_out[,c("id","temp_id","start_time","end_time","low_freq","high_freq","start_file","end_file","procedure","label","signal_code")],
                          det_negs[,c("id","temp_id","start_time","end_time","low_freq","high_freq","start_file","end_file","procedure","label","signal_code")])
-
+    
     combine_negs$duplicated = duplicated(combine_negs[c(3:length(combine_negs))]) | duplicated(combine_negs[c(3:length(combine_negs))],fromLast = TRUE)
     db_to_del = combine_negs$id[-which(combine_negs$duplicated)]
     db_to_del = db_to_del[-which(is.na(db_to_del))]
-
+    
     #delete on db if applicable
     if(length(db_to_del)>0){
-
+      
       print("deleting existing negatives which now conflict...")
       #don't hard delete since it will delete all dets even if procedure changed
       table_delete(conn,'detections',db_to_del)
-
+      
       det_negs2 = det_negs[which(det_negs$id %in% db_to_del),]
-
+      
       #only delete from same procedure and signal code
       dets_left = dbFetch(dbSendQuery(conn,paste("SELECT detections.* FROM detections WHERE original_id IN (",paste(as.integer(det_negs2$original_id),collapse=",",sep=""),") AND label = 0 AND procedure = ",procedure," AND status = 2 AND signal_code = ",signal_code,sep="")))
-
+      
       dets_left_id = as.integer(dets_left$id)
       #print(dets_left_id)
       if(length(dets_left_id)>0){
         table_delete(conn,'detections',dets_left_id)
       }
     }
-
-    local_to_push = combine_negs$temp_id[-which(combine_negs$duplicated)]
-    local_to_push = local_to_push[-which(is.na(local_to_push))]
+    local_to_push = combine_negs$temp_id
+    if(any(combine_negs$duplicated)){
+      local_to_push = local_to_push[-which(combine_negs$duplicated)]
+    }
+    if(any(is.na(local_to_push))){
+      local_to_push = local_to_push[-which(is.na(local_to_push))]
+    }
   }else{
-
+    
     local_to_push = i_neg_out$temp_id
-
+    
   }
-
+  
+  
+  
   if(length(local_to_push)>0){
-
+    
     i_neg_out = i_neg_out[which(i_neg_out$temp_id %in% local_to_push),]
     i_neg_out$temp_id=NULL
     i_neg_out$id = NULL
-
+    
+    #check for presence of this condition, remove if present (violates db checks)
+    if(any(i_neg_out$end_time==0)){
+      i_neg_out = i_neg_out[-which(i_neg_out$end_time==0),]
+    }
+    
     print(paste("submitting i_neg data for effort name:",fgname,", procedure:",procedure,"and signal_code:",signal_code))
-
+    
     out = dbAppendTable(conn,"detections",i_neg_out)
-
+    
     print("data submitted!")
-
+    
     return(out)
-
+    
   }else{
-
+    
     print("no changes detected in positive data, leaving unchanged.")
-
+    
     return(0)
   }
-
-
-
+  
+  
+  
 }
+
 
 #' Create assumed detections for implied negative data
 #'
@@ -892,7 +904,6 @@ table_insert <-function(conn,tablename,dataset,colvector=NULL,idname = 'id'){
 
 }
 
-
 #' Update data into the database
 #'
 #' Update data into a named database table. Assumes postgresql db with existing connection.
@@ -904,98 +915,115 @@ table_insert <-function(conn,tablename,dataset,colvector=NULL,idname = 'id'){
 #' @return result
 #' @export
 table_update <-function(conn,tablename,dataset,colvector=NULL,idname = 'id'){
-
+  
   idname= as.character(idname)
-
+  
   #if id is not first column of dataset, make it be
   if(colnames(dataset)[1]!=idname){
     dataset=data.frame(dataset[[idname]],dataset[,which(colnames(dataset)!=idname)])
     colnames(dataset)[1]=idname
   }
-
+  
   #sanitize dataset for integer 64 type, and convert back to integer (doesn't work with dbind further below)
   for(i in 1:length(dataset)){
     if(class(dataset[,i])=="integer64"){
       dataset[,i]=as.integer(dataset[,i])
     }
   }
-
+  
   if(is.null(colvector)){
     colvector_wid=colnames(dataset)
     colvector = colvector_wid[-which(colvector_wid==idname)]
   }else{
-
+    
     colvector_wid = c(idname,colvector)
     colvector_wid=colvector_wid[which(!duplicated(colvector_wid))]
-
+    
     #truncate dataset to just colvector and id
     dataset = dataset[,which(colnames(dataset) %in% colvector_wid)]
-
+    
   }
-
+  
   #check that dataset has all required cols.
-
+  
   if(any(!colvector_wid %in% colnames(dataset))){
     stop("insuffecient columns provided in dataset argument")
   }
-
-
-
+  
+  
+  
   #check that only integer ids are passed
   if(!all(is.finite(as.integer(dataset[[idname]])))){
     stop("invalid id values passed in dataset")
   }
-
+  
   dataset[[idname]] = as.integer(dataset[[idname]])
-
+  
   cols = paste("('",paste(colvector_wid,collapse="','"),"')",sep="")
-
+  
   dtquery = paste("SELECT data_type,column_name
                FROM information_schema.columns
                WHERE table_schema = 'public'
                   AND table_name ='",tablename,"'
                   AND column_name IN ",cols,sep="")
-
+  
   dtquery <- gsub("[\r\n]", " ", dtquery)
-
+  
   #get data types
   dtypes = dbFetch(dbSendQuery(conn,dtquery))
-
+  
   #check data types match.
   if(any(!colvector %in% dtypes$column_name)){
     stop("columns do not match database table names")
   }
-
+  
   #query the data table to be modified. Compare to the existing dataset, and reduce it
   #to only the modified data.
-
-  existingdata = dbFetch(dbSendQuery(conn,paste("SELECT",paste(colvector_wid,collapse = ",",sep=""),"FROM",
-                                        tablename,"WHERE",idname,"IN (",paste(dataset[,idname],collapse=","),");")))
-
+  
+  chunksize = 1000000
+  
+  chunks =  1:ceiling(nrow(dataset)/chunksize)
+  
+  existingdata = list()
+  
+  for(i in chunks){
+    
+    if(i == chunks[length(chunks)]){
+      end = nrow(dataset)
+    }else{
+      end = chunksize*i
+    }
+    existingdata[[i]] = dbFetch(dbSendQuery(conn,paste("SELECT",paste(colvector_wid,collapse = ",",sep=""),"FROM",
+                                                       tablename,"WHERE",idname,"IN (",paste(dataset[(chunksize*(i-1)):end,idname],collapse=","),");")))
+    
+  }
+  
+  existingdata = do.call('rbind',existingdata)
+  
   for(i in 1:length(existingdata)){
     if(class(existingdata[,i])=="integer64"){
       existingdata[,i]=as.integer(existingdata[,i])
     }
   }
-
+  
   comb_data <- merge(existingdata, dataset,by=colvector_wid, all=TRUE)
-
+  
   delta_ids = comb_data[,idname][which(duplicated(comb_data[,idname]))]
-
+  
   if(length(delta_ids)>0 & length(delta_ids)<nrow(dataset)){
-
+    
     warning("Some identical rows to database copy provided in dataset. Only updating changed rows.")
-
+    
     dataset = dataset[which(dataset[,idname] %in% delta_ids),]
-
+    
   }else if(length(delta_ids)==0){
-
+    
     stop("Error: no changes detected in the provided dataset compared to database copy. Terminating")
   }
-
+  
   #convert any posixct date types into character prior to serialization (otherwise they get changed to
   #numeric by R)
-
+  
   for(i in 1:length(dataset)){
     if(class(dataset[,i])=="POSIXct"){
       dataset[,i] = format(dataset[,i],"%Y-%m-%d %H:%M:%S%z")
@@ -1003,84 +1031,85 @@ table_update <-function(conn,tablename,dataset,colvector=NULL,idname = 'id'){
   }
   #after redesigning triggers, modify this so it's a true update and not a delete / insert if task exceeds 1000
   #rows
-
+  
   #single transaction.
   dbBegin(conn)
-
+  
   try({
-
-
-  #serialize dataset and construct query.
-  #first part of query
-  q1 = ""
-  tempnamesvec = c()
-  for(i in 1:length(colvector)){
-    tempnamesvec = c(tempnamesvec,paste("c",i,sep=""))
-    q1_sub= paste(colvector[i],paste("temp",tempnamesvec[i],sep="."),sep="=")
-    if(i !=length(colvector)){
-      q1_sub=paste(q1_sub,",",sep="")
-    }
-
-    q1 = paste(q1,q1_sub,sep="")
-  }
-
-  #third part of query
-  q3 = paste("temp(",idname,",",paste(tempnamesvec,collapse = ","),")",sep="")
-
-  #second part of query
-  q2 = ""
-  ds_ser=as.vector(t(unlist(dataset)))
-  #generate sequence:
-  vals=list()
-  for(i in 1:nrow(dataset)){
-    vals[[i]] = seq(from = i, by = nrow(dataset),length.out = length(colvector_wid))
-  }
-  vals=do.call("c",vals)
-
-  ds_by_row = ds_ser[vals]
-  item_count = 0
-  start_ind = 1
-
-  for(i in 1:nrow(dataset)){
-
-    q2_sub = "("
-    for(j in 1:length(colvector_wid)){
-      item_count = item_count+1
-      new_val = paste("$",item_count,"::",dtypes[which(dtypes$column_name == colvector_wid[j]),"data_type"],sep="")
-      if(j !=length(colvector_wid)){
-        new_val=paste(new_val,",",sep="")
-      }else{
-        new_val=paste(new_val,")",sep="")
+    
+    
+    #serialize dataset and construct query.
+    #first part of query
+    q1 = ""
+    tempnamesvec = c()
+    for(i in 1:length(colvector)){
+      tempnamesvec = c(tempnamesvec,paste("c",i,sep=""))
+      q1_sub= paste(colvector[i],paste("temp",tempnamesvec[i],sep="."),sep="=")
+      if(i !=length(colvector)){
+        q1_sub=paste(q1_sub,",",sep="")
       }
-      q2_sub= paste(q2_sub,new_val,sep="")
+      
+      q1 = paste(q1,q1_sub,sep="")
     }
-
-    if(i ==nrow(dataset) | object.size(q2)> 75000){
-
-      q2 = paste(q2,q2_sub,sep="")
-
-      query = paste("UPDATE",tablename,"AS m SET",q1,"FROM (values",q2,") AS",q3,"WHERE",paste("m.",idname,sep=""),"=",paste("temp.",idname,sep=""))
-
-      dbBind(dbSendQuery(conn, query), params=ds_by_row[start_ind:(i*length(colvector_wid))])
-
-      start_ind = (i*length(colvector_wid)) + 1
-
-      item_count = 0
-
-      q2 = ""
-
-    }else{
-      q2=paste(q2,q2_sub,",",sep="")
-
+    
+    #third part of query
+    q3 = paste("temp(",idname,",",paste(tempnamesvec,collapse = ","),")",sep="")
+    
+    #second part of query
+    q2 = ""
+    ds_ser=as.vector(t(unlist(dataset)))
+    #generate sequence:
+    vals=list()
+    for(i in 1:nrow(dataset)){
+      vals[[i]] = seq(from = i, by = nrow(dataset),length.out = length(colvector_wid))
     }
-
-  }
-
+    vals=do.call("c",vals)
+    
+    ds_by_row = ds_ser[vals]
+    item_count = 0
+    start_ind = 1
+    
+    for(i in 1:nrow(dataset)){
+      
+      q2_sub = "("
+      for(j in 1:length(colvector_wid)){
+        item_count = item_count+1
+        new_val = paste("$",item_count,"::",dtypes[which(dtypes$column_name == colvector_wid[j]),"data_type"],sep="")
+        if(j !=length(colvector_wid)){
+          new_val=paste(new_val,",",sep="")
+        }else{
+          new_val=paste(new_val,")",sep="")
+        }
+        q2_sub= paste(q2_sub,new_val,sep="")
+      }
+      
+      if(i ==nrow(dataset) | object.size(q2)> 75000){
+        
+        q2 = paste(q2,q2_sub,sep="")
+        
+        query = paste("UPDATE",tablename,"AS m SET",q1,"FROM (values",q2,") AS",q3,"WHERE",paste("m.",idname,sep=""),"=",paste("temp.",idname,sep=""))
+        
+        dbBind(dbSendQuery(conn, query), params=ds_by_row[start_ind:(i*length(colvector_wid))])
+        
+        start_ind = (i*length(colvector_wid)) + 1
+        
+        item_count = 0
+        
+        q2 = ""
+        
+      }else{
+        q2=paste(q2,q2_sub,",",sep="")
+        
+      }
+      
+    }
+    
   })
-
+  
   dbCommit(conn)
-
+  
 }
+
 
 #' Delete data in the database by id
 #'
