@@ -12,10 +12,11 @@
 #' @return The database connection
 #' @export
 
-pamdbConnect<-function(dbname,infoScript,sslKey_path,sslCert_path){
+pamdbConnect<-function(dbname,infoScript,sslKey_path=NA,sslCert_path=NA){
 
   cfg = source(infoScript,local = TRUE)
-
+  
+  if(!is.na(sslKey_path)){
   con <- dbConnect(RPostgres::Postgres(),
                    dbname = dbname,
                    host = dsn_hostname,
@@ -25,6 +26,15 @@ pamdbConnect<-function(dbname,infoScript,sslKey_path,sslCert_path){
                    sslmode = 'require',
                    sslkey= sslKey_path,
                    sslcert = sslCert_path)
+  }else{
+    con <- dbConnect(RPostgres::Postgres(),
+                     dbname = dbname,
+                     host = dsn_hostname,
+                     port = dsn_port,
+                     user = dsn_uid,
+                     password = dsn_pwd,
+                     sslmode = 'require')
+  }
 
   return(con)
 

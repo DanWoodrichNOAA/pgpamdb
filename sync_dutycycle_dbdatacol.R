@@ -38,6 +38,8 @@ duty_cycle$enddata_datetime_utc = as.POSIXct(duty_cycle$enddata_datetime_utc,for
 data_col= dbGet("SELECT * FROM data_collection")
 
 data_col$sampling_rate = as.integer(data_col$sampling_rate)
+data_col$rec_time = as.numeric(data_col$rec_time)
+data_col$cycle_time = as.numeric(data_col$cycle_time)
 
 #strip down duty_cycle to only columns used in d_c
 duty_cycle_format = data.frame(duty_cycle$mooring_deploy_name,duty_cycle$mooring_site_name,
@@ -49,12 +51,20 @@ duty_cycle_format = data.frame(duty_cycle$mooring_deploy_name,duty_cycle$mooring
 
 colnames(duty_cycle_format) = c('name','location_code','latitude','longitude','water_depth','sensor_depth','rec_time','cycle_time','start_data','end_data','sampling_rate')
 
+
+duty_cycle_format$rec_time = as.numeric(duty_cycle_format$rec_time)
+duty_cycle_format$cycle_time = as.numeric(duty_cycle_format$cycle_time)
+
+
 #add in new rows. 
 
 
 if(any(!duty_cycle_format$name %in% data_col$name)){
   
   duty_cycle_format_new = duty_cycle_format[-which(duty_cycle_format$name %in% data_col$name),]
+  duty_cycle_format_new$rec_time= as.numeric(duty_cycle_format_new$rec_time)
+  duty_cycle_format_new$cycle_time= as.numeric(duty_cycle_format_new$cycle_time)
+  duty_cycle_format$sampling_rate = as.integer(duty_cycle_format$sampling_rate)
   
   dbAppendTable(con,"data_collection",duty_cycle_format_new)
   

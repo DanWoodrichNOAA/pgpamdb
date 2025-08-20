@@ -18,7 +18,7 @@ library(DBI)
 
 #source("./R/functions.R") #package under construction
 #setwd("C:/Users/daniel.woodrich/Desktop/pgpamdb")
-source("./etc/paths.R") #populates connection paths which contain connection variables.
+#source("./etc/paths.R") #populates connection paths which contain connection variables.
 
 #as I use this script, I'm just deleting and changing code to create the lookup table. to upload fgs only, I only use the first
 #part of the loop below
