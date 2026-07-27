@@ -11,3 +11,5 @@ pgpamdb.Rproj
 temp/
 etc/*
 load_status.xlsx
+.RData
+.RData*
