@@ -4,7 +4,7 @@
 \alias{pamdbConnect}
 \title{Pamdb connect}
 \usage{
-pamdbConnect(dbname, infoScript, sslKey_path, sslCert_path)
+pamdbConnect(dbname, infoScript, sslKey_path = NA, sslCert_path = NA)
 }
 \arguments{
 \item{dbname}{The name of the db}
